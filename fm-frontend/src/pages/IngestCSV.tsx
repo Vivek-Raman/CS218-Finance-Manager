@@ -21,7 +21,6 @@ interface FieldMapping {
 export function IngestCSV() {
   const navigate = useNavigate()
   const [csvFile, setCsvFile] = useState<File | null>(null)
-  const [csvContent, setCsvContent] = useState<string>("")
   const [csvHeaders, setCsvHeaders] = useState<string[]>([])
   const [csvData, setCsvData] = useState<any[]>([])
   const [fieldMapping, setFieldMapping] = useState<FieldMapping>({
@@ -50,33 +49,22 @@ export function IngestCSV() {
   }
 
   const parseCSV = (file: File) => {
-    // Read file content as text
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const text = e.target?.result as string
-      setCsvContent(text)
-      
-      // Parse CSV for display
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          if (results.data && results.data.length > 0) {
-            const headers = Object.keys(results.data[0] as object)
-            setCsvHeaders(headers)
-            setCsvData(results.data as any[])
-          }
-        },
-        error: (error) => {
-          console.error("Error parsing CSV:", error)
-          alert("Error parsing CSV file. Please check the file format.")
-        },
-      })
-    }
-    reader.onerror = () => {
-      alert("Error reading CSV file.")
-    }
-    reader.readAsText(file)
+    // Parse CSV for display
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        if (results.data && results.data.length > 0) {
+          const headers = Object.keys(results.data[0] as object)
+          setCsvHeaders(headers)
+          setCsvData(results.data as any[])
+        }
+      },
+      error: (error) => {
+        console.error("Error parsing CSV:", error)
+        alert("Error parsing CSV file. Please check the file format.")
+      },
+    })
   }
 
   const handleMappingChange = (field: keyof FieldMapping, value: string) => {
@@ -130,7 +118,6 @@ export function IngestCSV() {
       
       // Reset form
       setCsvFile(null)
-      setCsvContent("")
       setCsvHeaders([])
       setCsvData([])
       setFieldMapping({

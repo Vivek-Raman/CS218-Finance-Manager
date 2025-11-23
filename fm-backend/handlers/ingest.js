@@ -242,6 +242,7 @@ exports.handler = async (event) => {
     console.log('Sending rows to SQS', {
       queueUrl: QUEUE_URL,
       rowCount: rows.length,
+      queueUrlSet: !!QUEUE_URL,
     });
     
     const sendPromises = rows.map((row, index) => {
@@ -272,8 +273,18 @@ exports.handler = async (event) => {
       return sqs.send(new SendMessageCommand({
         QueueUrl: QUEUE_URL,
         MessageBody: messageBody,
-      })).catch((error) => {
-        return { success: false, index, error: error.message, errorCode: error.Code || error.$metadata?.httpStatusCode };
+      })).then((result) => {
+        // Successful send returns AWS SDK response
+        return { success: true, index, result };
+      }).catch((error) => {
+        // Failed send returns error details
+        return { 
+          success: false, 
+          index, 
+          error: error.message || error.toString() || 'Unknown error',
+          errorCode: error.Code || error.$metadata?.httpStatusCode || error.code,
+          errorName: error.name || error.constructor?.name
+        };
       });
     });
     
@@ -281,23 +292,28 @@ exports.handler = async (event) => {
     const results = await Promise.allSettled(sendPromises);
     
     // Analyze results - since we catch errors, all promises should fulfill
-    const processedResults = results.map(r => {
+    const processedResults = results.map((r, idx) => {
       if (r.status === 'rejected') {
-        return { success: false, index: -1, error: r.reason?.message || 'Unknown error' };
+        return { 
+          success: false, 
+          index: idx, 
+          error: r.reason?.message || r.reason?.toString() || 'Unknown error',
+          errorCode: r.reason?.Code || r.reason?.$metadata?.httpStatusCode || r.reason?.code
+        };
       }
       return r.value;
     });
     
-    const successful = processedResults.filter(r => r?.success).length;
-    const failed = processedResults.filter(r => !r?.success).length;
+    const successful = processedResults.filter(r => r?.success === true).length;
+    const failed = processedResults.filter(r => r?.success === false).length;
     
     if (failed > 0) {
       const failures = processedResults
-        .filter(r => !r?.success)
-        .map(r => ({ index: r.index, error: r.error, errorCode: r.errorCode }));
+        .filter(r => r?.success === false)
+        .map(r => ({ index: r.index, error: r.error || 'Unknown error', errorCode: r.errorCode }));
       
       console.error('Some SQS messages failed to send', {
-        totalRows: body.rows.length,
+        totalRows: rows.length,
         successful: successful,
         failed: failed,
         failures: failures,

@@ -10,6 +10,11 @@ const client = new DynamoDBClient({});
 const dynamodb = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.EXPENSES_TABLE;
 
+// Validate environment variables
+if (!TABLE_NAME) {
+  throw new Error('EXPENSES_TABLE environment variable is not set');
+}
+
 /**
  * Generate a hash from summary and timestamp
  */
@@ -41,25 +46,49 @@ exports.handler = async (event) => {
     
     try {
       // Parse SQS message - now contains mapped fields directly
-      const messageBody = JSON.parse(record.body);
+      console.log('Raw SQS record body', {
+        messageId: record.messageId,
+        bodyType: typeof record.body,
+        bodyPreview: typeof record.body === 'string' ? record.body.substring(0, 200) : record.body,
+      });
+      
+      let messageBody;
+      try {
+        messageBody = JSON.parse(record.body);
+      } catch (parseError) {
+        throw new Error(`Failed to parse SQS message body as JSON: ${parseError.message}. Body: ${record.body?.substring(0, 200)}`);
+      }
+      
       const { summary, amount, timestamp, s3Key } = messageBody;
       
       console.log('Parsed SQS message', {
         messageId: record.messageId,
         hasSummary: !!summary,
+        summary: summary,
         hasAmount: !!amount,
+        amount: amount,
         hasTimestamp: !!timestamp,
+        timestamp: timestamp,
         s3Key: s3Key,
+        messageBodyKeys: Object.keys(messageBody || {}),
       });
       
       // Validate mapped data
-      if (!summary || !timestamp) {
-        throw new Error('Missing required fields: summary and timestamp are required');
+      if (!summary || typeof summary !== 'string' || summary.trim() === '') {
+        throw new Error(`Missing or invalid summary field: ${JSON.stringify(summary)}`);
+      }
+      
+      if (!timestamp || typeof timestamp !== 'string' || timestamp.trim() === '') {
+        throw new Error(`Missing or invalid timestamp field: ${JSON.stringify(timestamp)}`);
+      }
+      
+      if (amount === null || amount === undefined || amount === '') {
+        throw new Error(`Missing amount field: ${JSON.stringify(amount)}`);
       }
       
       const parsedAmount = parseFloat(amount);
       if (isNaN(parsedAmount)) {
-        throw new Error(`Invalid amount: ${amount}`);
+        throw new Error(`Invalid amount: cannot parse "${amount}" as a number`);
       }
       
       // Generate expense ID hash
@@ -129,11 +158,19 @@ exports.handler = async (event) => {
         messageId: record.messageId,
         expenseId: expenseId,
         tableName: TABLE_NAME,
+        expense: expense,
       });
-      await dynamodb.send(new PutCommand({
+      
+      const putResult = await dynamodb.send(new PutCommand({
         TableName: TABLE_NAME,
         Item: expense,
       }));
+      
+      console.log('DynamoDB PutCommand completed', {
+        messageId: record.messageId,
+        expenseId: expenseId,
+        putResult: putResult,
+      });
       
       const recordDuration = Date.now() - recordStartTime;
       console.log('Expense processed successfully', {
