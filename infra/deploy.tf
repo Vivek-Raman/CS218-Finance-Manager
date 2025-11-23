@@ -353,7 +353,6 @@ resource "aws_lambda_function" "process_expense" {
     variables = {
       APP_NAME       = var.app_name
       EXPENSES_TABLE = aws_dynamodb_table.expenses.name
-      DLQ_URL        = aws_sqs_queue.ingest_dlq.url
     }
   }
 

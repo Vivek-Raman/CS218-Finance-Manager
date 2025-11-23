@@ -93,6 +93,11 @@ export function IngestCSV() {
       return
     }
 
+    if (!csvFile) {
+      alert("Please select a CSV file")
+      return
+    }
+
     if (csvData.length === 0) {
       alert("No CSV data to upload")
       return
@@ -104,17 +109,15 @@ export function IngestCSV() {
       const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
       const endpoint = `${apiUrl}/api/ingest`
 
+      // Create FormData to send file
+      const formData = new FormData()
+      formData.append('csvFile', csvFile)
+      formData.append('rows', JSON.stringify(csvData))
+      formData.append('fieldMapping', JSON.stringify(fieldMapping))
+
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          csvContent: csvContent,
-          csvFileName: csvFile?.name || 'upload.csv',
-          rows: csvData,
-          fieldMapping: fieldMapping,
-        }),
+        body: formData,
       })
 
       if (!response.ok) {

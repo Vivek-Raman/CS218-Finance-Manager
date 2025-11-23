@@ -1,5 +1,5 @@
 .PHONY: dev dev-env load-env tofu-outputs help
-.PHONY: deploy deploy-infra deploy-plan deploy-destroy
+.PHONY: deploy deploy-infra deploy-frontend deploy-plan deploy-destroy
 .PHONY: build-frontend build-backend
 .PHONY: tofu-init tofu-plan tofu-apply tofu-destroy tofu-validate tofu-fmt
 
@@ -24,9 +24,10 @@ help:
 	@echo "  tofu-fmt     - Format OpenTofu files"
 	@echo ""
 	@echo "Deployment targets:"
-	@echo "  deploy       - Full deployment (plan + apply)"
-	@echo "  deploy-plan  - Show deployment plan without applying"
-	@echo "  deploy-infra - Deploy infrastructure only"
+	@echo "  deploy         - Full deployment (infra + frontend)"
+	@echo "  deploy-plan    - Show deployment plan without applying"
+	@echo "  deploy-infra   - Deploy infrastructure only"
+	@echo "  deploy-frontend - Deploy frontend to Amplify"
 	@echo "  deploy-destroy - Destroy all infrastructure"
 
 # Load OpenTofu outputs - outputs shell export commands
@@ -73,7 +74,17 @@ dev:
 # Build targets
 build-frontend:
 	@echo "Building frontend..."
-	@cd fm-frontend && npm run build
+	@cd infra && \
+	API_URL=$$(tofu output -raw env_api_gateway_url 2>/dev/null || echo ""); \
+	cd ../fm-frontend && \
+	if [ -n "$$API_URL" ]; then \
+	  echo "Building with API URL: $$API_URL"; \
+	  VITE_API_URL="$$API_URL" npm run build; \
+	else \
+	  echo "⚠️  Warning: API Gateway URL not found. Building without VITE_API_URL."; \
+	  echo "   Run 'make deploy-infra' first to set up infrastructure."; \
+	  npm run build; \
+	fi
 	@echo "✓ Frontend build complete"
 
 build-backend:
@@ -121,8 +132,80 @@ deploy-infra: tofu-validate tofu-apply
 	@echo "✓ Infrastructure deployed successfully"
 	@echo "Run 'make tofu-outputs' to see deployment outputs"
 
-deploy: deploy-infra
+deploy-frontend: build-frontend
+	@echo "Deploying frontend to Amplify..."
+	@cd infra && \
+	AMPLIFY_APP_ID=$$(tofu output -raw amplify_app_id 2>/dev/null); \
+	AMPLIFY_BRANCH=$$(tofu output -raw amplify_branch 2>/dev/null || echo "main"); \
+	if [ -z "$$AMPLIFY_APP_ID" ]; then \
+	  echo "❌ Error: Amplify app ID not found. Run 'make deploy-infra' first."; \
+	  exit 1; \
+	fi; \
+	cd ../fm-frontend && \
+	if [ ! -d dist ]; then \
+	  echo "❌ Error: Frontend build not found. Run 'make build-frontend' first."; \
+	  exit 1; \
+	fi; \
+	echo "Creating deployment package..."; \
+	cd dist && \
+	zip -r ../frontend-deploy.zip . > /dev/null 2>&1 && \
+	cd .. && \
+	echo "Deploying to Amplify app $$AMPLIFY_APP_ID, branch $$AMPLIFY_BRANCH..."; \
+	if command -v aws >/dev/null 2>&1; then \
+	  echo "Creating deployment job..."; \
+	  JOB_INFO=$$(aws amplify create-deployment \
+	    --app-id "$$AMPLIFY_APP_ID" \
+	    --branch-name "$$AMPLIFY_BRANCH" \
+	    --output json 2>/dev/null); \
+	  if [ $$? -eq 0 ] && [ -n "$$JOB_INFO" ]; then \
+	    JOB_ID=$$(echo "$$JOB_INFO" | grep -o '"jobId"[^,}]*' | cut -d'"' -f4); \
+	    ZIP_UPLOAD_URL=$$(echo "$$JOB_INFO" | grep -o '"zipUploadUrl"[^,}]*' | cut -d'"' -f4); \
+	    if [ -n "$$JOB_ID" ] && [ -n "$$ZIP_UPLOAD_URL" ]; then \
+	      echo "Uploading artifacts to Amplify (job: $$JOB_ID)..."; \
+	      curl -X PUT "$$ZIP_UPLOAD_URL" -H "Content-Type: application/zip" --upload-file frontend-deploy.zip > /dev/null 2>&1; \
+	      if [ $$? -eq 0 ]; then \
+	        echo "Starting deployment..."; \
+	        aws amplify start-deployment \
+	          --app-id "$$AMPLIFY_APP_ID" \
+	          --branch-name "$$AMPLIFY_BRANCH" \
+	          --job-id "$$JOB_ID" > /dev/null 2>&1; \
+	        echo "✓ Deployment started successfully"; \
+	        echo "  Job ID: $$JOB_ID"; \
+	        echo "  Check status: aws amplify get-job --app-id $$AMPLIFY_APP_ID --branch-name $$AMPLIFY_BRANCH --job-id $$JOB_ID"; \
+	      else \
+	        echo "⚠️  Failed to upload artifacts. Trying alternative method..."; \
+	        echo "   Job ID: $$JOB_ID"; \
+	        echo "   Upload URL: $$ZIP_UPLOAD_URL"; \
+	        echo "   Package: $$(pwd)/frontend-deploy.zip"; \
+	      fi; \
+	    else \
+	      echo "⚠️  Could not parse deployment response."; \
+	      echo "   Response: $$JOB_INFO"; \
+	    fi; \
+	  else \
+	    echo "⚠️  Could not create deployment via AWS CLI."; \
+	    echo "   Ensure AWS credentials are configured and Amplify app exists."; \
+	    echo "   App ID: $$AMPLIFY_APP_ID"; \
+	    echo "   Branch: $$AMPLIFY_BRANCH"; \
+	    echo "   Build package: $$(pwd)/frontend-deploy.zip"; \
+	    echo "   Deploy manually via AWS Console if needed."; \
+	  fi; \
+	else \
+	  echo "⚠️  AWS CLI not found. Build package created at:"; \
+	  echo "   $$(pwd)/frontend-deploy.zip"; \
+	  echo "   Install AWS CLI and configure credentials, or deploy manually via AWS Console."; \
+	  echo "   App ID: $$AMPLIFY_APP_ID"; \
+	  echo "   Branch: $$AMPLIFY_BRANCH"; \
+	fi; \
+	rm -f frontend-deploy.zip 2>/dev/null || true
+
+deploy: deploy-infra deploy-frontend
 	@echo "✓ Full deployment complete"
+	@cd infra && \
+	AMPLIFY_URL=$$(tofu output -raw amplify_app_url 2>/dev/null || echo ""); \
+	if [ -n "$$AMPLIFY_URL" ]; then \
+	  echo "Frontend URL: $$AMPLIFY_URL"; \
+	fi
 
 deploy-destroy: tofu-destroy
 	@echo "✓ Infrastructure destroyed"

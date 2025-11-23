@@ -35,6 +35,11 @@ output "amplify_app_id" {
   value       = aws_amplify_app.frontend.id
 }
 
+output "amplify_branch" {
+  description = "Amplify branch name"
+  value       = var.amplify_branch
+}
+
 output "dynamodb_table_name" {
   description = "DynamoDB expenses table name (legacy, use env_dynamodb_table_name)"
   value       = aws_dynamodb_table.expenses.name
