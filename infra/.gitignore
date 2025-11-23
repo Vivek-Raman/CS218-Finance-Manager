@@ -1,0 +1,15 @@
+# Terraform/OpenTofu files
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+.terraform/
+
+# Archive files
+*.zip
+
+# Logs
+*.log
+

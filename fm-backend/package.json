@@ -1,0 +1,13 @@
+{
+  "name": "finance-manager-backend",
+  "version": "1.0.0",
+  "description": "Backend Lambda functions for Finance Manager",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+
