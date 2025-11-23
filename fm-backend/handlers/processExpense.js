@@ -133,6 +133,28 @@ exports.handler = async (event) => {
         });
       }
       
+      // If duplicate detected, skip saving and just log
+      if (existingExpense) {
+        const recordDuration = Date.now() - recordStartTime;
+        console.log('Duplicate expense detected - ignoring record', {
+          messageId: record.messageId,
+          expenseId: expenseId,
+          existingExpenseId: existingExpense.id,
+          summary: summary,
+          timestamp: timestamp,
+          duration: `${recordDuration}ms`,
+        });
+        
+        results.push({
+          messageId: record.messageId,
+          success: true,
+          expenseId: expenseId,
+          skipped: true,
+          reason: 'duplicate',
+        });
+        continue;
+      }
+      
       // Create expense item
       const expense = {
         id: expenseId,
@@ -142,16 +164,6 @@ exports.handler = async (event) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      
-      // If collision detected, add a note
-      if (existingExpense) {
-        expense.note = `Duplicate detected: Another expense with the same summary and timestamp already exists (ID: ${existingExpense.id})`;
-        console.warn('Duplicate expense detected', {
-          messageId: record.messageId,
-          expenseId: expenseId,
-          existingExpenseId: existingExpense.id,
-        });
-      }
       
       // Save to DynamoDB
       console.log('Saving expense to DynamoDB', {
@@ -176,7 +188,6 @@ exports.handler = async (event) => {
       console.log('Expense processed successfully', {
         messageId: record.messageId,
         expenseId: expenseId,
-        isDuplicate: !!existingExpense,
         duration: `${recordDuration}ms`,
       });
       

@@ -9,6 +9,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { ArrowLeft, Upload, FileText } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
@@ -16,6 +25,12 @@ interface FieldMapping {
   summary: string
   amount: string
   timestamp: string
+}
+
+const HEADER_MAPPINGS = {
+  summary: ['Description', 'Summary', 'Note', 'Detail'],
+  amount: ['Amount', 'Value', 'Price'],
+  timestamp: ['Trans. Date', 'Date', 'Time', 'Timestamp']
 }
 
 export function IngestCSV() {
@@ -29,6 +44,33 @@ export function IngestCSV() {
     timestamp: "",
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const autoMatchHeaders = (csvHeaders: string[]): FieldMapping => {
+    const mapping: FieldMapping = {
+      summary: "",
+      amount: "",
+      timestamp: "",
+    }
+
+    // Helper function to find matching header (case-insensitive)
+    const findMatchingHeader = (validHeaders: string[]): string => {
+      for (const validHeader of validHeaders) {
+        const found = csvHeaders.find(
+          (header) => header.toLowerCase() === validHeader.toLowerCase()
+        )
+        if (found) {
+          return found // Return the actual CSV header (preserving original case)
+        }
+      }
+      return ""
+    }
+
+    mapping.summary = findMatchingHeader(HEADER_MAPPINGS.summary)
+    mapping.amount = findMatchingHeader(HEADER_MAPPINGS.amount)
+    mapping.timestamp = findMatchingHeader(HEADER_MAPPINGS.timestamp)
+
+    return mapping
+  }
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -58,6 +100,10 @@ export function IngestCSV() {
           const headers = Object.keys(results.data[0] as object)
           setCsvHeaders(headers)
           setCsvData(results.data as any[])
+          
+          // Auto-match headers
+          const autoMatched = autoMatchHeaders(headers)
+          setFieldMapping(autoMatched)
         }
       },
       error: (error) => {
@@ -113,8 +159,7 @@ export function IngestCSV() {
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
       }
 
-      const result = await response.json()
-      alert(`Successfully enqueued ${result.rowsEnqueued} expenses for processing. They will be processed asynchronously.`)
+      await response.json()
       
       // Reset form
       setCsvFile(null)
@@ -125,9 +170,11 @@ export function IngestCSV() {
         amount: "",
         timestamp: "",
       })
+      
+      // Navigate back to dashboard
+      navigate("/")
     } catch (error) {
       console.error("Error uploading CSV:", error)
-      alert(`Failed to upload CSV: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setIsSubmitting(false)
     }
@@ -196,22 +243,39 @@ export function IngestCSV() {
           <>
             <Card className="mb-6">
               <CardHeader>
-                <CardTitle>CSV Headers</CardTitle>
+                <CardTitle>CSV Preview</CardTitle>
                 <CardDescription>
-                  Detected columns in your CSV file
+                  Preview of your CSV data (showing first {Math.min(10, csvData.length)} rows)
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {csvHeaders.map((header, index) => (
-                    <span
-                      key={index}
-                      className="px-3 py-1 bg-muted rounded-md text-sm font-mono"
-                    >
-                      {header}
-                    </span>
-                  ))}
-                </div>
+                <Table>
+                  <TableCaption>
+                    {csvData.length > 10 
+                      ? `Showing first 10 of ${csvData.length} rows` 
+                      : `Total ${csvData.length} rows`}
+                  </TableCaption>
+                  <TableHeader>
+                    <TableRow>
+                      {csvHeaders.map((header) => (
+                        <TableHead key={header}>{header}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {csvData.slice(0, 10).map((row, rowIndex) => (
+                      <TableRow key={rowIndex}>
+                        {csvHeaders.map((header) => (
+                          <TableCell key={header}>
+                            {row[header] !== undefined && row[header] !== null
+                              ? String(row[header])
+                              : ""}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </CardContent>
             </Card>
 
