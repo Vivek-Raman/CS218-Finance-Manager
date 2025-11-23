@@ -191,36 +191,90 @@ resource "aws_iam_role_policy" "s3_access" {
   })
 }
 
+# Build Lambda packages with dependencies (runs during plan phase)
+data "external" "build_lambda_packages" {
+  program = ["sh", "-c", <<-EOT
+    set -e  # Exit on error
+    BACKEND_DIR="${abspath(path.module)}/../fm-backend"
+    INFRA_DIR="${abspath(path.module)}"
+    
+    cd "$BACKEND_DIR" || { echo '{"error":"Failed to cd to backend directory"}' >&2; exit 1; }
+    
+    # Install dependencies if node_modules doesn't exist or package.json changed
+    if [ ! -d node_modules ] || [ package.json -nt node_modules ]; then
+      npm install --production >&2 || { echo '{"error":"npm install failed"}' >&2; exit 1; }
+    fi
+    
+    # Create build directories
+    mkdir -p "$INFRA_DIR/.terraform/lambda-packages" || { echo '{"error":"Failed to create packages directory"}' >&2; exit 1; }
+    
+    # Build health package
+    mkdir -p "$INFRA_DIR/.terraform/lambda-packages/health" || { echo '{"error":"Failed to create health directory"}' >&2; exit 1; }
+    cp handlers/health.js "$INFRA_DIR/.terraform/lambda-packages/health/" || { echo '{"error":"Failed to copy health.js"}' >&2; exit 1; }
+    cp -r node_modules "$INFRA_DIR/.terraform/lambda-packages/health/" 2>/dev/null || { echo '{"error":"Failed to copy node_modules for health"}' >&2; exit 1; }
+    
+    # Build expenses package
+    mkdir -p "$INFRA_DIR/.terraform/lambda-packages/expenses" || { echo '{"error":"Failed to create expenses directory"}' >&2; exit 1; }
+    cp handlers/expenses.js "$INFRA_DIR/.terraform/lambda-packages/expenses/" || { echo '{"error":"Failed to copy expenses.js"}' >&2; exit 1; }
+    cp -r node_modules "$INFRA_DIR/.terraform/lambda-packages/expenses/" 2>/dev/null || { echo '{"error":"Failed to copy node_modules for expenses"}' >&2; exit 1; }
+    
+    # Build ingest package
+    mkdir -p "$INFRA_DIR/.terraform/lambda-packages/ingest" || { echo '{"error":"Failed to create ingest directory"}' >&2; exit 1; }
+    cp handlers/ingest.js "$INFRA_DIR/.terraform/lambda-packages/ingest/" || { echo '{"error":"Failed to copy ingest.js"}' >&2; exit 1; }
+    cp -r node_modules "$INFRA_DIR/.terraform/lambda-packages/ingest/" 2>/dev/null || { echo '{"error":"Failed to copy node_modules for ingest"}' >&2; exit 1; }
+    
+    # Build processExpense package
+    mkdir -p "$INFRA_DIR/.terraform/lambda-packages/processExpense" || { echo '{"error":"Failed to create processExpense directory"}' >&2; exit 1; }
+    cp handlers/processExpense.js "$INFRA_DIR/.terraform/lambda-packages/processExpense/" || { echo '{"error":"Failed to copy processExpense.js"}' >&2; exit 1; }
+    cp -r node_modules "$INFRA_DIR/.terraform/lambda-packages/processExpense/" 2>/dev/null || { echo '{"error":"Failed to copy node_modules for processExpense"}' >&2; exit 1; }
+    
+    # Verify directories were created
+    [ -d "$INFRA_DIR/.terraform/lambda-packages/health" ] || { echo '{"error":"Health directory not found after creation"}' >&2; exit 1; }
+    [ -d "$INFRA_DIR/.terraform/lambda-packages/expenses" ] || { echo '{"error":"Expenses directory not found after creation"}' >&2; exit 1; }
+    [ -d "$INFRA_DIR/.terraform/lambda-packages/ingest" ] || { echo '{"error":"Ingest directory not found after creation"}' >&2; exit 1; }
+    [ -d "$INFRA_DIR/.terraform/lambda-packages/processExpense" ] || { echo '{"error":"ProcessExpense directory not found after creation"}' >&2; exit 1; }
+    
+    # Return JSON output (required by external data source)
+    echo '{"status":"success"}'
+  EOT
+  ]
+}
+
 # Archive health handler
 data "archive_file" "health_zip" {
+  depends_on = [data.external.build_lambda_packages]
   type        = "zip"
-  source_file = "${path.module}/../backend/handlers/health.js"
+  source_dir  = "${path.module}/.terraform/lambda-packages/health"
   output_path = "${path.module}/.terraform/health.zip"
 }
 
 # Archive expenses handler
 data "archive_file" "expenses_zip" {
+  depends_on = [data.external.build_lambda_packages]
   type        = "zip"
-  source_file = "${path.module}/../backend/handlers/expenses.js"
+  source_dir  = "${path.module}/.terraform/lambda-packages/expenses"
   output_path = "${path.module}/.terraform/expenses.zip"
 }
 
 # Archive ingest handler
 data "archive_file" "ingest_zip" {
+  depends_on = [data.external.build_lambda_packages]
   type        = "zip"
-  source_file = "${path.module}/../backend/handlers/ingest.js"
+  source_dir  = "${path.module}/.terraform/lambda-packages/ingest"
   output_path = "${path.module}/.terraform/ingest.zip"
 }
 
 # Archive processExpense handler
 data "archive_file" "process_expense_zip" {
+  depends_on = [data.external.build_lambda_packages]
   type        = "zip"
-  source_file = "${path.module}/../backend/handlers/processExpense.js"
+  source_dir  = "${path.module}/.terraform/lambda-packages/processExpense"
   output_path = "${path.module}/.terraform/processExpense.zip"
 }
 
 # Lambda function for health check
 resource "aws_lambda_function" "health" {
+  depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.health_zip.output_path
   function_name    = "${var.app_name}-health"
   role            = aws_iam_role.lambda_execution_role.arn
@@ -241,6 +295,7 @@ resource "aws_lambda_function" "health" {
 
 # Lambda function for expenses
 resource "aws_lambda_function" "expenses" {
+  depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.expenses_zip.output_path
   function_name    = "${var.app_name}-expenses"
   role            = aws_iam_role.lambda_execution_role.arn
@@ -262,6 +317,7 @@ resource "aws_lambda_function" "expenses" {
 
 # Lambda function for ingest
 resource "aws_lambda_function" "ingest" {
+  depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.ingest_zip.output_path
   function_name    = "${var.app_name}-ingest"
   role            = aws_iam_role.lambda_execution_role.arn
@@ -284,6 +340,7 @@ resource "aws_lambda_function" "ingest" {
 
 # Lambda function for processExpense
 resource "aws_lambda_function" "process_expense" {
+  depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.process_expense_zip.output_path
   function_name    = "${var.app_name}-process-expense"
   role            = aws_iam_role.lambda_execution_role.arn
