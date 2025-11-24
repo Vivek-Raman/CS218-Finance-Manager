@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -15,13 +19,9 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Data source to get current AWS account ID
 data "aws_caller_identity" "current" {}
-
-# Data source to get current AWS region
 data "aws_region" "current" {}
 
-# IAM role for Lambda execution
 resource "aws_iam_role" "lambda_execution_role" {
   name = "${var.app_name}-lambda-execution-role"
 
@@ -43,13 +43,11 @@ resource "aws_iam_role" "lambda_execution_role" {
   }
 }
 
-# Attach basic Lambda execution policy
 resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
   role       = aws_iam_role.lambda_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# DynamoDB table for expenses
 resource "aws_dynamodb_table" "expenses" {
   name         = "${var.app_name}-expenses"
   billing_mode = "PAY_PER_REQUEST"
@@ -69,7 +67,6 @@ resource "aws_dynamodb_table" "expenses" {
   }
 }
 
-# S3 bucket for CSV file storage
 resource "aws_s3_bucket" "csv_uploads" {
   bucket = "${var.app_name}-csv-uploads-${data.aws_caller_identity.current.account_id}"
 
@@ -78,7 +75,6 @@ resource "aws_s3_bucket" "csv_uploads" {
   }
 }
 
-# S3 bucket versioning (optional, for file history)
 resource "aws_s3_bucket_versioning" "csv_uploads" {
   bucket = aws_s3_bucket.csv_uploads.id
 
@@ -87,7 +83,6 @@ resource "aws_s3_bucket_versioning" "csv_uploads" {
   }
 }
 
-# S3 bucket server-side encryption
 resource "aws_s3_bucket_server_side_encryption_configuration" "csv_uploads" {
   bucket = aws_s3_bucket.csv_uploads.id
 
@@ -98,7 +93,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "csv_uploads" {
   }
 }
 
-# IAM policy for DynamoDB access
 resource "aws_iam_role_policy" "dynamodb_access" {
   name = "${var.app_name}-dynamodb-access"
   role = aws_iam_role.lambda_execution_role.id
@@ -121,20 +115,18 @@ resource "aws_iam_role_policy" "dynamodb_access" {
   })
 }
 
-# SQS Dead-Letter Queue
 resource "aws_sqs_queue" "ingest_dlq" {
   name                      = "${var.app_name}-ingest-dlq"
-  message_retention_seconds = 1209600 # 14 days
+  message_retention_seconds = 1209600
 
   tags = {
     Name = "finance-manager"
   }
 }
 
-# SQS Queue for ingest
 resource "aws_sqs_queue" "ingest_queue" {
   name                      = "${var.app_name}-ingest-queue"
-  message_retention_seconds = 345600 # 4 days
+  message_retention_seconds = 345600
   visibility_timeout_seconds = 60
 
   redrive_policy = jsonencode({
@@ -147,7 +139,6 @@ resource "aws_sqs_queue" "ingest_queue" {
   }
 }
 
-# IAM policy for SQS access
 resource "aws_iam_role_policy" "sqs_access" {
   name = "${var.app_name}-sqs-access"
   role = aws_iam_role.lambda_execution_role.id
@@ -172,7 +163,6 @@ resource "aws_iam_role_policy" "sqs_access" {
   })
 }
 
-# IAM policy for S3 access
 resource "aws_iam_role_policy" "s3_access" {
   name = "${var.app_name}-s3-access"
   role = aws_iam_role.lambda_execution_role.id
@@ -192,7 +182,6 @@ resource "aws_iam_role_policy" "s3_access" {
   })
 }
 
-# Build Lambda packages with dependencies (runs during plan phase)
 data "external" "build_lambda_packages" {
   program = ["sh", "-c", <<-EOT
     set -e  # Exit on error
@@ -241,7 +230,6 @@ data "external" "build_lambda_packages" {
   ]
 }
 
-# Archive health handler
 data "archive_file" "health_zip" {
   depends_on = [data.external.build_lambda_packages]
   type        = "zip"
@@ -249,7 +237,6 @@ data "archive_file" "health_zip" {
   output_path = "${path.module}/.terraform/health.zip"
 }
 
-# Archive expenses handler
 data "archive_file" "expenses_zip" {
   depends_on = [data.external.build_lambda_packages]
   type        = "zip"
@@ -257,7 +244,6 @@ data "archive_file" "expenses_zip" {
   output_path = "${path.module}/.terraform/expenses.zip"
 }
 
-# Archive ingest handler
 data "archive_file" "ingest_zip" {
   depends_on = [data.external.build_lambda_packages]
   type        = "zip"
@@ -265,7 +251,6 @@ data "archive_file" "ingest_zip" {
   output_path = "${path.module}/.terraform/ingest.zip"
 }
 
-# Archive processExpense handler
 data "archive_file" "process_expense_zip" {
   depends_on = [data.external.build_lambda_packages]
   type        = "zip"
@@ -273,7 +258,6 @@ data "archive_file" "process_expense_zip" {
   output_path = "${path.module}/.terraform/processExpense.zip"
 }
 
-# Lambda function for health check
 resource "aws_lambda_function" "health" {
   depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.health_zip.output_path
@@ -294,7 +278,6 @@ resource "aws_lambda_function" "health" {
   }
 }
 
-# Lambda function for expenses
 resource "aws_lambda_function" "expenses" {
   depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.expenses_zip.output_path
@@ -316,7 +299,6 @@ resource "aws_lambda_function" "expenses" {
   }
 }
 
-# Lambda function for ingest
 resource "aws_lambda_function" "ingest" {
   depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.ingest_zip.output_path
@@ -339,7 +321,6 @@ resource "aws_lambda_function" "ingest" {
   }
 }
 
-# Lambda function for processExpense
 resource "aws_lambda_function" "process_expense" {
   depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.process_expense_zip.output_path
@@ -362,7 +343,6 @@ resource "aws_lambda_function" "process_expense" {
   }
 }
 
-# SQS event source mapping for processExpense Lambda
 resource "aws_lambda_event_source_mapping" "process_expense_sqs" {
   event_source_arn = aws_sqs_queue.ingest_queue.arn
   function_name    = aws_lambda_function.process_expense.arn
@@ -370,7 +350,84 @@ resource "aws_lambda_event_source_mapping" "process_expense_sqs" {
   maximum_batching_window_in_seconds = 5
 }
 
-# API Gateway HTTP API
+resource "aws_cognito_user_pool" "main" {
+  name = "${var.app_name}-user-pool"
+  password_policy {
+    minimum_length    = 8
+    require_lowercase = true
+    require_uppercase = true
+    require_numbers   = true
+    require_symbols   = false
+  }
+
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "verified_email"
+      priority = 1
+    }
+  }
+
+  verification_message_template {
+    default_email_option = "CONFIRM_WITH_CODE"
+    email_subject        = "Your verification code"
+    email_message        = "Your verification code is {####}"
+  }
+
+  schema {
+    name                = "email"
+    attribute_data_type = "String"
+    required            = false
+    mutable             = true
+  }
+
+  schema {
+    name                = "name"
+    attribute_data_type = "String"
+    required            = false
+    mutable             = true
+  }
+
+  tags = {
+    Name = "finance-manager"
+  }
+
+  lifecycle {
+    ignore_changes = [schema]
+  }
+}
+
+resource "aws_cognito_user_pool_client" "main" {
+  name         = "${var.app_name}-client"
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  generate_secret                      = false
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                   = ["code"]
+  allowed_oauth_scopes                 = ["openid"]
+  supported_identity_providers = ["COGNITO"]
+
+  callback_urls = [
+    "${var.cognito_callback_url}/auth/callback",
+    "http://localhost:5173/auth/callback"
+  ]
+
+  logout_urls = [
+    "${var.cognito_callback_url}/",
+    "http://localhost:5173/"
+  ]
+
+  prevent_user_existence_errors = "ENABLED"
+
+  lifecycle {
+    ignore_changes = [callback_urls, logout_urls]
+  }
+}
+
+resource "aws_cognito_user_pool_domain" "main" {
+  domain       = "${var.app_name}-${data.aws_caller_identity.current.account_id}"
+  user_pool_id = aws_cognito_user_pool.main.id
+}
+
 resource "aws_apigatewayv2_api" "main" {
   name          = "${var.app_name}-api"
   protocol_type = "HTTP"
@@ -388,7 +445,18 @@ resource "aws_apigatewayv2_api" "main" {
   }
 }
 
-# API Gateway integration for health Lambda
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id           = aws_apigatewayv2_api.main.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${var.app_name}-cognito-authorizer"
+
+  jwt_configuration {
+    audience = [aws_cognito_user_pool_client.main.id]
+    issuer   = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${aws_cognito_user_pool.main.id}"
+  }
+}
+
 resource "aws_apigatewayv2_integration" "health" {
   api_id = aws_apigatewayv2_api.main.id
 
@@ -397,7 +465,6 @@ resource "aws_apigatewayv2_integration" "health" {
   integration_method = "POST"
 }
 
-# API Gateway integration for expenses Lambda
 resource "aws_apigatewayv2_integration" "expenses" {
   api_id = aws_apigatewayv2_api.main.id
 
@@ -406,7 +473,6 @@ resource "aws_apigatewayv2_integration" "expenses" {
   integration_method = "POST"
 }
 
-# API Gateway integration for ingest Lambda
 resource "aws_apigatewayv2_integration" "ingest" {
   api_id = aws_apigatewayv2_api.main.id
 
@@ -415,42 +481,44 @@ resource "aws_apigatewayv2_integration" "ingest" {
   integration_method = "POST"
 }
 
-# API Gateway route for health
 resource "aws_apigatewayv2_route" "health" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "GET /api/health"
   target    = "integrations/${aws_apigatewayv2_integration.health.id}"
 }
 
-# API Gateway route for expenses GET
 resource "aws_apigatewayv2_route" "expenses_get" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "GET /api/expenses"
-  target    = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+  api_id           = aws_apigatewayv2_api.main.id
+  route_key        = "GET /api/expenses"
+  target           = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+  authorizer_id    = aws_apigatewayv2_authorizer.cognito.id
+  authorization_type = "JWT"
 }
 
-# API Gateway route for expenses POST
 resource "aws_apigatewayv2_route" "expenses_post" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "POST /api/expenses"
-  target    = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+  api_id           = aws_apigatewayv2_api.main.id
+  route_key        = "POST /api/expenses"
+  target           = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+  authorizer_id    = aws_apigatewayv2_authorizer.cognito.id
+  authorization_type = "JWT"
 }
 
-# API Gateway route for expenses PUT
 resource "aws_apigatewayv2_route" "expenses_put" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "PUT /api/expenses"
-  target    = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+  api_id           = aws_apigatewayv2_api.main.id
+  route_key        = "PUT /api/expenses"
+  target           = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+  authorizer_id    = aws_apigatewayv2_authorizer.cognito.id
+  authorization_type = "JWT"
 }
 
-# API Gateway route for ingest POST
 resource "aws_apigatewayv2_route" "ingest_post" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "POST /api/ingest"
-  target    = "integrations/${aws_apigatewayv2_integration.ingest.id}"
+  api_id           = aws_apigatewayv2_api.main.id
+  route_key        = "POST /api/ingest"
+  target           = "integrations/${aws_apigatewayv2_integration.ingest.id}"
+  authorizer_id    = aws_apigatewayv2_authorizer.cognito.id
+  authorization_type = "JWT"
 }
 
-# API Gateway stage
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.main.id
   name        = "$default"
@@ -461,7 +529,6 @@ resource "aws_apigatewayv2_stage" "default" {
   }
 }
 
-# Lambda permissions for API Gateway to invoke health Lambda
 resource "aws_lambda_permission" "health_api_gw" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -470,7 +537,6 @@ resource "aws_lambda_permission" "health_api_gw" {
   source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
 }
 
-# Lambda permissions for API Gateway to invoke expenses Lambda
 resource "aws_lambda_permission" "expenses_api_gw" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -479,7 +545,6 @@ resource "aws_lambda_permission" "expenses_api_gw" {
   source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
 }
 
-# Lambda permissions for API Gateway to invoke ingest Lambda
 resource "aws_lambda_permission" "ingest_api_gw" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -488,14 +553,6 @@ resource "aws_lambda_permission" "ingest_api_gw" {
   source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
 }
 
-# Note: HTTP APIs (API Gateway v2) are public by default and don't support resource policies.
-# For stricter access control, consider using:
-# - AWS WAF rules attached to the API Gateway
-# - CORS configuration to restrict origins (already configured above)
-# - API keys and usage plans
-# - IAM authorization on Lambda functions
-
-# Amplify App
 resource "aws_amplify_app" "frontend" {
   name       = "${var.app_name}-frontend"
   repository = var.amplify_repository != "" ? var.amplify_repository : null
@@ -519,7 +576,6 @@ resource "aws_amplify_app" "frontend" {
           - node_modules/**/*
   EOT
 
-  # Custom rules for SPA routing
   custom_rule {
     source = "/<*>"
     status = "200"
@@ -529,6 +585,12 @@ resource "aws_amplify_app" "frontend" {
   environment_variables = {
     REACT_APP_API_URL = aws_apigatewayv2_api.main.api_endpoint
     VITE_API_URL      = aws_apigatewayv2_api.main.api_endpoint
+    VITE_COGNITO_USER_POOL_ID = aws_cognito_user_pool.main.id
+    VITE_COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.main.id
+    VITE_COGNITO_DOMAIN       = aws_cognito_user_pool_domain.main.domain
+    VITE_COGNITO_REGION       = data.aws_region.current.name
+    VITE_COGNITO_HOSTED_UI_URL = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+    VITE_COGNITO_REDIRECT_URI = "${var.cognito_callback_url}/auth/callback"
   }
 
   tags = {
@@ -536,7 +598,6 @@ resource "aws_amplify_app" "frontend" {
   }
 }
 
-# Amplify Branch
 resource "aws_amplify_branch" "main" {
   app_id      = aws_amplify_app.frontend.id
   branch_name = var.amplify_branch
@@ -546,6 +607,68 @@ resource "aws_amplify_branch" "main" {
 
   tags = {
     Name = "finance-manager"
+  }
+}
+
+resource "null_resource" "update_cognito_callbacks" {
+  depends_on = [aws_amplify_app.frontend, aws_cognito_user_pool_client.main, aws_amplify_branch.main]
+
+  triggers = {
+    amplify_domain = aws_amplify_app.frontend.default_domain
+    cognito_client_id = aws_cognito_user_pool_client.main.id
+    user_pool_id = aws_cognito_user_pool.main.id
+    amplify_app_id = aws_amplify_app.frontend.id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      set -e
+      
+      USER_POOL_ID="${aws_cognito_user_pool.main.id}"
+      CLIENT_ID="${aws_cognito_user_pool_client.main.id}"
+      AMPLIFY_APP_ID="${aws_amplify_app.frontend.id}"
+      REGION="${data.aws_region.current.name}"
+      BRANCH="${var.amplify_branch}"
+      API_URL="${aws_apigatewayv2_api.main.api_endpoint}"
+      COGNITO_DOMAIN="${aws_cognito_user_pool_domain.main.domain}"
+      
+      # Get Amplify app details to construct URL
+      AMPLIFY_DOMAIN=$(aws amplify get-app --app-id "$AMPLIFY_APP_ID" --region "$REGION" --query 'app.defaultDomain' --output text 2>/dev/null || echo "")
+      
+      if [ -z "$AMPLIFY_DOMAIN" ]; then
+        echo "Error: Could not get Amplify domain"
+        exit 1
+      fi
+      
+      AMPLIFY_URL="https://$BRANCH.$AMPLIFY_DOMAIN"
+      CALLBACK_URL="$AMPLIFY_URL/auth/callback"
+      LOGOUT_URL="$AMPLIFY_URL/"
+      
+      echo "Updating Cognito callback URLs with: $CALLBACK_URL"
+      echo "Setting callback URLs: $CALLBACK_URL and http://localhost:5173/auth/callback"
+      aws cognito-idp update-user-pool-client \
+        --user-pool-id "$USER_POOL_ID" \
+        --client-id "$CLIENT_ID" \
+        --callback-urls "$CALLBACK_URL" "http://localhost:5173/auth/callback" \
+        --logout-urls "$LOGOUT_URL" "http://localhost:5173/" \
+        --allowed-o-auth-flows code \
+        --allowed-o-auth-flows-user-pool-client \
+        --allowed-o-auth-scopes openid \
+        --supported-identity-providers COGNITO \
+        --region "$REGION" || {
+          echo "Error: Failed to update Cognito client. Retrying..."
+          exit 1
+        }
+      
+      echo "Successfully updated Cognito callback URLs"
+      echo "Updating Amplify environment variable VITE_COGNITO_REDIRECT_URI"
+      aws amplify update-app \
+        --app-id "$AMPLIFY_APP_ID" \
+        --environment-variables "REACT_APP_API_URL=$API_URL,VITE_API_URL=$API_URL,VITE_COGNITO_USER_POOL_ID=$USER_POOL_ID,VITE_COGNITO_CLIENT_ID=$CLIENT_ID,VITE_COGNITO_DOMAIN=$COGNITO_DOMAIN,VITE_COGNITO_REGION=$REGION,VITE_COGNITO_HOSTED_UI_URL=https://$COGNITO_DOMAIN.auth.$REGION.amazoncognito.com,VITE_COGNITO_REDIRECT_URI=$CALLBACK_URL" \
+        --region "$REGION" || echo "Warning: Could not update Amplify environment variables"
+      
+      echo "Successfully updated Amplify environment variables"
+    EOT
   }
 }
 

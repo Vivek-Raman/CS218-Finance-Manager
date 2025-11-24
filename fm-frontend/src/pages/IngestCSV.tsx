@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table"
 import { ArrowLeft, Upload, FileText } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { authenticatedFetch } from "@/lib/utils"
 
 interface FieldMapping {
   summary: string
@@ -149,7 +150,7 @@ export function IngestCSV() {
       formData.append('rows', JSON.stringify(csvData))
       formData.append('fieldMapping', JSON.stringify(fieldMapping))
 
-      const response = await fetch(endpoint, {
+      const response = await authenticatedFetch(endpoint, {
         method: 'POST',
         body: formData,
       })

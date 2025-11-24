@@ -1,10 +1,12 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Upload, Tag, BarChart3 } from "lucide-react"
+import { Upload, Tag, BarChart3, LogOut } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { useAuth } from "@/contexts/AuthContext"
 
 export function Dashboard() {
   const navigate = useNavigate()
+  const { signOut } = useAuth()
 
   const handleIngestCSV = () => {
     navigate("/ingest")
@@ -19,14 +21,24 @@ export function Dashboard() {
     console.log("Visualize data clicked")
   }
 
+  const handleLogout = () => {
+    signOut()
+  }
+
   return (
     <div className="min-h-screen bg-background p-8">
       <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold tracking-tight">Finance Manager</h1>
-          <p className="text-muted-foreground mt-2">
-            Manage your finances with ease
-          </p>
+        <div className="mb-8 flex items-start justify-between">
+          <div>
+            <h1 className="text-4xl font-bold tracking-tight">Finance Manager</h1>
+            <p className="text-muted-foreground mt-2">
+              Manage your finances with ease
+            </p>
+          </div>
+          <Button onClick={handleLogout} variant="outline" className="flex items-center gap-2">
+            <LogOut className="h-4 w-4" />
+            Logout
+          </Button>
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">

@@ -22,3 +22,9 @@ variable "amplify_branch" {
   default     = "main"
 }
 
+variable "cognito_callback_url" {
+  description = "Base URL for Cognito OAuth callbacks (will be set automatically after Amplify deployment)"
+  type        = string
+  default     = "http://localhost:5173"
+}
+

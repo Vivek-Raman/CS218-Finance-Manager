@@ -36,13 +36,34 @@ load-env:
 	@cd infra && \
 	API_URL=$$(tofu output -raw env_api_gateway_url 2>/dev/null); \
 	TABLE_NAME=$$(tofu output -raw env_dynamodb_table_name 2>/dev/null); \
+	COGNITO_USER_POOL_ID=$$(tofu output -raw cognito_user_pool_id 2>/dev/null); \
+	COGNITO_CLIENT_ID=$$(tofu output -raw cognito_user_pool_client_id 2>/dev/null); \
+	COGNITO_DOMAIN=$$(tofu output -raw cognito_user_pool_domain 2>/dev/null); \
+	COGNITO_REGION=$$(tofu output -raw cognito_user_pool_id 2>/dev/null | cut -d'_' -f1); \
+	COGNITO_HOSTED_UI_URL=$$(tofu output -raw cognito_hosted_ui_url 2>/dev/null); \
 	if [ -n "$$API_URL" ]; then \
 	  echo "export API_GATEWAY_URL=$$API_URL"; \
 	  echo "export VITE_API_URL=$$API_URL"; \
 	fi; \
 	if [ -n "$$TABLE_NAME" ]; then \
 	  echo "export DYNAMODB_TABLE_NAME=$$TABLE_NAME"; \
-	fi
+	fi; \
+	if [ -n "$$COGNITO_USER_POOL_ID" ]; then \
+	  echo "export VITE_COGNITO_USER_POOL_ID=$$COGNITO_USER_POOL_ID"; \
+	fi; \
+	if [ -n "$$COGNITO_CLIENT_ID" ]; then \
+	  echo "export VITE_COGNITO_CLIENT_ID=$$COGNITO_CLIENT_ID"; \
+	fi; \
+	if [ -n "$$COGNITO_DOMAIN" ]; then \
+	  echo "export VITE_COGNITO_DOMAIN=$$COGNITO_DOMAIN"; \
+	fi; \
+	if [ -n "$$COGNITO_REGION" ]; then \
+	  echo "export VITE_COGNITO_REGION=$$COGNITO_REGION"; \
+	fi; \
+	if [ -n "$$COGNITO_HOSTED_UI_URL" ]; then \
+	  echo "export VITE_COGNITO_HOSTED_UI_URL=$$COGNITO_HOSTED_UI_URL"; \
+	fi; \
+	echo "export VITE_COGNITO_REDIRECT_URI=http://localhost:5173/auth/callback"
 
 # Show environment outputs
 dev-env:
@@ -63,12 +84,26 @@ dev:
 	@cd infra && \
 	API_URL=$$(tofu output -raw env_api_gateway_url 2>/dev/null || echo ""); \
 	TABLE_NAME=$$(tofu output -raw env_dynamodb_table_name 2>/dev/null || echo ""); \
+	COGNITO_USER_POOL_ID=$$(tofu output -raw cognito_user_pool_id 2>/dev/null || echo ""); \
+	COGNITO_CLIENT_ID=$$(tofu output -raw cognito_user_pool_client_id 2>/dev/null || echo ""); \
+	COGNITO_DOMAIN=$$(tofu output -raw cognito_user_pool_domain 2>/dev/null || echo ""); \
+	COGNITO_REGION=$$(tofu output -raw cognito_user_pool_id 2>/dev/null | cut -d'_' -f1 || echo ""); \
+	COGNITO_HOSTED_UI_URL=$$(tofu output -raw cognito_hosted_ui_url 2>/dev/null || echo ""); \
 	if [ -z "$$API_URL" ]; then \
 	  echo "⚠️  Warning: env_api_gateway_url not found. Run 'tofu apply' in infra/ first."; \
+	fi; \
+	if [ -z "$$COGNITO_CLIENT_ID" ]; then \
+	  echo "⚠️  Warning: Cognito configuration not found. Run 'tofu apply' in infra/ first."; \
 	fi; \
 	cd ../fm-frontend && \
 	VITE_API_URL="$$API_URL" \
 	DYNAMODB_TABLE_NAME="$$TABLE_NAME" \
+	VITE_COGNITO_USER_POOL_ID="$$COGNITO_USER_POOL_ID" \
+	VITE_COGNITO_CLIENT_ID="$$COGNITO_CLIENT_ID" \
+	VITE_COGNITO_DOMAIN="$$COGNITO_DOMAIN" \
+	VITE_COGNITO_REGION="$$COGNITO_REGION" \
+	VITE_COGNITO_HOSTED_UI_URL="$$COGNITO_HOSTED_UI_URL" \
+	VITE_COGNITO_REDIRECT_URI="http://localhost:5173/auth/callback" \
 	npm run dev -- --clearScreen false
 
 # Build targets
@@ -147,6 +182,11 @@ deploy-frontend: build-frontend
 	  exit 1; \
 	fi; \
 	echo "Creating deployment package..."; \
+	# Include amplify.yml if it exists for proper configuration \
+	if [ -f amplify.yml ]; then \
+	  cp amplify.yml dist/ 2>/dev/null || true; \
+	fi; \
+	# For manual deployments, zip should contain files at root \
 	cd dist && \
 	zip -r ../frontend-deploy.zip . > /dev/null 2>&1 && \
 	cd .. && \

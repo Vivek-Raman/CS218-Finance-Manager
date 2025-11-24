@@ -1,0 +1,46 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+customHeaders:
+  - pattern: '**/*.js'
+    headers:
+      - key: 'Content-Type'
+        value: 'application/javascript'
+  - pattern: '**/*.css'
+    headers:
+      - key: 'Content-Type'
+        value: 'text/css'
+  - pattern: '**/*.json'
+    headers:
+      - key: 'Content-Type'
+        value: 'application/json'
+  - pattern: '**/*.png'
+    headers:
+      - key: 'Content-Type'
+        value: 'image/png'
+  - pattern: '**/*.jpg'
+    headers:
+      - key: 'Content-Type'
+        value: 'image/jpeg'
+  - pattern: '**/*.svg'
+    headers:
+      - key: 'Content-Type'
+        value: 'image/svg+xml'
+  - pattern: '**/*.ico'
+    headers:
+      - key: 'Content-Type'
+        value: 'image/x-icon'
+

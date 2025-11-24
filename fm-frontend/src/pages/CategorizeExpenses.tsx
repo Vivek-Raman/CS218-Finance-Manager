@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select"
 import { ArrowLeft, Settings } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { authenticatedFetch } from "@/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -94,7 +95,7 @@ export function CategorizeExpenses() {
         const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
         const endpoint = `${apiUrl}/api/expenses?uncategorized=true`
         
-        const response = await fetch(endpoint, {
+        const response = await authenticatedFetch(endpoint, {
           method: 'GET',
         })
         
@@ -157,7 +158,7 @@ export function CategorizeExpenses() {
       const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
       const endpoint = `${apiUrl}/api/expenses`
       
-      const response = await fetch(endpoint, {
+      const response = await authenticatedFetch(endpoint, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
