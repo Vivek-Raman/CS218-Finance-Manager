@@ -3,7 +3,7 @@
  * Handler for expense management with DynamoDB integration
  */
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const crypto = require('crypto');
 
 const client = new DynamoDBClient({});
@@ -16,10 +16,38 @@ const headers = {
 };
 
 /**
- * Generate a hash from summary and timestamp
+ * Extract Cognito user ID from API Gateway event
+ * Returns userId or null if not found
  */
-function generateHash(summary, timestamp) {
-  const hashInput = `${summary}|${timestamp}`;
+function getUserId(event) {
+  // JWT authorizer provides claims in requestContext.authorizer.claims
+  const claims = event.requestContext?.authorizer?.claims;
+  if (claims && claims.sub) {
+    return claims.sub;
+  }
+  
+  // Fallback: try to extract from JWT token directly if available
+  const authHeader = event.headers?.Authorization || event.headers?.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.substring(7);
+      const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+      if (payload.sub) {
+        return payload.sub;
+      }
+    } catch (error) {
+      // Ignore parsing errors
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Generate a hash from userId, summary and timestamp
+ */
+function generateHash(userId, summary, timestamp) {
+  const hashInput = `${userId}|${summary}|${timestamp}`;
   return crypto.createHash('sha256').update(hashInput).digest('hex');
 }
 
@@ -34,36 +62,59 @@ exports.handler = async (event) => {
     timestamp: new Date().toISOString(),
   });
   
+  // Extract user ID from event
+  const userId = getUserId(event);
+  if (!userId) {
+    console.warn('Unauthorized: No user ID found in request', {
+      method: method,
+      hasAuthorizer: !!event.requestContext?.authorizer,
+    });
+    return {
+      statusCode: 401,
+      headers,
+      body: JSON.stringify({
+        message: 'Unauthorized: User authentication required',
+      }),
+    };
+  }
+
   try {
     switch (method) {
       case 'GET': {
-        // Get expenses, optionally filtered by uncategorized status
+        // Get expenses for the authenticated user, optionally filtered by uncategorized status
         const queryParams = event.queryStringParameters || {};
         const uncategorized = queryParams.uncategorized === 'true';
         
-        console.log('Scanning expenses table', {
+        console.log('Querying expenses table', {
           tableName: TABLE_NAME,
+          userId: userId,
           uncategorized: uncategorized,
           queryParams: queryParams,
         });
         
-        // Build scan command with optional filter for uncategorized expenses
-        const scanParams = {
+        // Build query command using GSI to filter by userId
+        const queryParams_dynamo = {
           TableName: TABLE_NAME,
+          IndexName: 'userId-index',
+          KeyConditionExpression: 'userId = :userId',
+          ExpressionAttributeValues: {
+            ':userId': userId,
+          },
         };
         
         // Filter for expenses without categorizedAt attribute
         if (uncategorized) {
-          scanParams.FilterExpression = 'attribute_not_exists(categorizedAt)';
+          queryParams_dynamo.FilterExpression = 'attribute_not_exists(categorizedAt)';
         }
         
-        const scanResult = await dynamodb.send(new ScanCommand(scanParams));
+        const queryResult = await dynamodb.send(new QueryCommand(queryParams_dynamo));
         
-        const itemCount = scanResult.Items?.length || 0;
+        const itemCount = queryResult.Items?.length || 0;
         console.log('Expenses retrieved successfully', {
           itemCount: itemCount,
-          scannedCount: scanResult.ScannedCount,
+          scannedCount: queryResult.ScannedCount,
           uncategorized: uncategorized,
+          userId: userId,
         });
         
         return {
@@ -71,7 +122,7 @@ exports.handler = async (event) => {
           headers,
           body: JSON.stringify({
             message: 'Expenses retrieved successfully',
-            data: scanResult.Items || [],
+            data: queryResult.Items || [],
           }),
         };
       }
@@ -82,6 +133,7 @@ exports.handler = async (event) => {
         console.log('Processing POST request', {
           hasBody: !!event.body,
           bodyKeys: Object.keys(body),
+          userId: userId,
         });
         
         // Validate required fields
@@ -100,10 +152,11 @@ exports.handler = async (event) => {
           };
         }
 
-        // Generate hash from summary and timestamp
-        const expenseId = generateHash(body.summary, body.timestamp);
+        // Generate hash from userId, summary and timestamp
+        const expenseId = generateHash(userId, body.summary, body.timestamp);
         console.log('Generated expense ID', {
           expenseId: expenseId,
+          userId: userId,
           summary: body.summary,
           timestamp: body.timestamp,
         });
@@ -132,6 +185,7 @@ exports.handler = async (event) => {
         // Create expense item
         const expense = {
           id: expenseId,
+          userId: userId,
           summary: body.summary,
           amount: parseFloat(body.amount),
           timestamp: body.timestamp,
@@ -150,6 +204,7 @@ exports.handler = async (event) => {
         
         console.log('Saving expense to DynamoDB', {
           expenseId: expenseId,
+          userId: userId,
           tableName: TABLE_NAME,
         });
         await dynamodb.send(new PutCommand({
@@ -160,6 +215,7 @@ exports.handler = async (event) => {
         const duration = Date.now() - startTime;
         console.log('Expense created successfully', {
           expenseId: expenseId,
+          userId: userId,
           isDuplicate: !!existingExpense,
           duration: `${duration}ms`,
         });
@@ -182,6 +238,7 @@ exports.handler = async (event) => {
         console.log('Processing PUT request', {
           hasBody: !!event.body,
           bodyKeys: Object.keys(updateBody),
+          userId: userId,
         });
         
         // Validate required fields
@@ -206,11 +263,12 @@ exports.handler = async (event) => {
         
         console.log('Updating expense with category', {
           expenseId: expenseId,
+          userId: userId,
           category: category,
           categorizedAt: categorizedAt,
         });
         
-        // Check if expense exists
+        // Check if expense exists and belongs to the user
         let existingExpense = null;
         try {
           const getResult = await dynamodb.send(new GetCommand({
@@ -226,6 +284,22 @@ exports.handler = async (event) => {
               body: JSON.stringify({
                 message: 'Expense not found',
                 id: expenseId,
+              }),
+            };
+          }
+          
+          // Verify expense belongs to the user
+          if (existingExpense.userId !== userId) {
+            console.warn('Unauthorized: Expense does not belong to user', {
+              expenseId: expenseId,
+              expenseUserId: existingExpense.userId,
+              requestUserId: userId,
+            });
+            return {
+              statusCode: 403,
+              headers,
+              body: JSON.stringify({
+                message: 'Forbidden: You do not have permission to update this expense',
               }),
             };
           }
@@ -266,6 +340,7 @@ exports.handler = async (event) => {
           
           console.log('Expense updated successfully', {
             expenseId: expenseId,
+            userId: userId,
             category: category,
             duration: `${duration}ms`,
           });

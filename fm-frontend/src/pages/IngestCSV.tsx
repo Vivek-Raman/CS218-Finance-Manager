@@ -147,7 +147,6 @@ export function IngestCSV() {
       // Create FormData to send file
       const formData = new FormData()
       formData.append('csvFile', csvFile)
-      formData.append('rows', JSON.stringify(csvData))
       formData.append('fieldMapping', JSON.stringify(fieldMapping))
 
       const response = await authenticatedFetch(endpoint, {

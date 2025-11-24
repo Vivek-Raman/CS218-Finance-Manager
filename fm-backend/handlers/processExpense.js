@@ -16,10 +16,10 @@ if (!TABLE_NAME) {
 }
 
 /**
- * Generate a hash from summary and timestamp
+ * Generate a hash from userId, summary and timestamp
  */
-function generateHash(summary, timestamp) {
-  const hashInput = `${summary}|${timestamp}`;
+function generateHash(userId, summary, timestamp) {
+  const hashInput = `${userId}|${summary}|${timestamp}`;
   return crypto.createHash('sha256').update(hashInput).digest('hex');
 }
 
@@ -59,10 +59,12 @@ exports.handler = async (event) => {
         throw new Error(`Failed to parse SQS message body as JSON: ${parseError.message}. Body: ${record.body?.substring(0, 200)}`);
       }
       
-      const { summary, amount, timestamp, s3Key } = messageBody;
+      const { userId, summary, amount, timestamp, s3Key } = messageBody;
       
       console.log('Parsed SQS message', {
         messageId: record.messageId,
+        hasUserId: !!userId,
+        userId: userId,
         hasSummary: !!summary,
         summary: summary,
         hasAmount: !!amount,
@@ -74,6 +76,10 @@ exports.handler = async (event) => {
       });
       
       // Validate mapped data
+      if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+        throw new Error(`Missing or invalid userId field: ${JSON.stringify(userId)}`);
+      }
+      
       if (!summary || typeof summary !== 'string' || summary.trim() === '') {
         throw new Error(`Missing or invalid summary field: ${JSON.stringify(summary)}`);
       }
@@ -92,10 +98,11 @@ exports.handler = async (event) => {
       }
       
       // Generate expense ID hash
-      const expenseId = generateHash(summary, timestamp);
+      const expenseId = generateHash(userId, summary, timestamp);
       console.log('Generated expense ID', {
         messageId: record.messageId,
         expenseId: expenseId,
+        userId: userId,
         summary: summary,
         timestamp: timestamp,
       });
@@ -158,6 +165,7 @@ exports.handler = async (event) => {
       // Create expense item
       const expense = {
         id: expenseId,
+        userId: userId,
         summary: summary,
         amount: parsedAmount,
         timestamp: timestamp,
@@ -169,6 +177,7 @@ exports.handler = async (event) => {
       console.log('Saving expense to DynamoDB', {
         messageId: record.messageId,
         expenseId: expenseId,
+        userId: userId,
         tableName: TABLE_NAME,
         expense: expense,
       });

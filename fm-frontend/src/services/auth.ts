@@ -158,7 +158,7 @@ export const handleAuthCallback = async (): Promise<{ accessToken: string; idTok
   }
 
   window.history.replaceState({}, document.title, window.location.pathname);
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise(resolve => setTimeout(resolve, 200));
 
   const storedRedirectUri = sessionStorage.getItem('oauth_redirect_uri');
   const redirectUri = storedRedirectUri || getRedirectUri();

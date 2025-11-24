@@ -6,6 +6,7 @@ const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 const Busboy = require('busboy');
+const { parse } = require('csv-parse/sync');
 
 const sqs = new SQSClient({});
 const s3 = new S3Client({});
@@ -16,6 +17,34 @@ const headers = {
   'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': '*',
 };
+
+/**
+ * Extract Cognito user ID from API Gateway event
+ * Returns userId or null if not found
+ */
+function getUserId(event) {
+  // JWT authorizer provides claims in requestContext.authorizer.claims
+  const claims = event.requestContext?.authorizer?.claims;
+  if (claims && claims.sub) {
+    return claims.sub;
+  }
+  
+  // Fallback: try to extract from JWT token directly if available
+  const authHeader = event.headers?.Authorization || event.headers?.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.substring(7);
+      const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+      if (payload.sub) {
+        return payload.sub;
+      }
+    } catch (error) {
+      // Ignore parsing errors
+    }
+  }
+  
+  return null;
+}
 
 /**
  * Apply field mapping to transform CSV row
@@ -104,6 +133,19 @@ exports.handler = async (event) => {
     timestamp: new Date().toISOString(),
   });
 
+  // Extract user ID from event
+  const userId = getUserId(event);
+  if (!userId) {
+    console.warn('Unauthorized: No user ID found in request');
+    return {
+      statusCode: 401,
+      headers,
+      body: JSON.stringify({
+        message: 'Unauthorized: User authentication required',
+      }),
+    };
+  }
+
   try {
     // Parse multipart/form-data
     let parsedData;
@@ -128,7 +170,6 @@ exports.handler = async (event) => {
     
     // Extract form fields
     const csvFile = files.csvFile;
-    const rowsJson = fields.rows;
     const fieldMappingJson = fields.fieldMapping;
 
     if (!csvFile) {
@@ -142,9 +183,8 @@ exports.handler = async (event) => {
       };
     }
 
-    let rows, fieldMapping;
+    let fieldMapping;
     try {
-      rows = JSON.parse(rowsJson);
       fieldMapping = JSON.parse(fieldMappingJson);
     } catch (parseError) {
       console.error('Error parsing JSON fields', { error: parseError.message });
@@ -158,6 +198,27 @@ exports.handler = async (event) => {
       };
     }
 
+    // Parse CSV file
+    let rows;
+    try {
+      const csvContent = csvFile.buffer.toString('utf8');
+      rows = parse(csvContent, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+      });
+    } catch (parseError) {
+      console.error('Error parsing CSV file', { error: parseError.message });
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          message: 'Error parsing CSV file',
+          error: parseError.message,
+        }),
+      };
+    }
+
     console.log('Parsed request data', {
       hasRows: !!rows,
       rowCount: rows?.length || 0,
@@ -165,6 +226,7 @@ exports.handler = async (event) => {
       hasCsvFile: !!csvFile,
       csvFileName: csvFile.filename,
       csvFileSize: csvFile.buffer.length,
+      userId: userId,
     });
     
     // Validate required fields
@@ -250,6 +312,7 @@ exports.handler = async (event) => {
       const mapped = applyMapping(row, fieldMapping);
       
       const messageBody = JSON.stringify({
+        userId: userId,
         summary: mapped.summary,
         amount: mapped.amount,
         timestamp: mapped.timestamp,
@@ -336,6 +399,7 @@ exports.handler = async (event) => {
       rowsEnqueued: successful,
       rowsFailed: failed,
       s3Key: s3Key,
+      userId: userId,
       duration: `${duration}ms`,
     });
     

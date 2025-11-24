@@ -58,6 +58,17 @@ resource "aws_dynamodb_table" "expenses" {
     type = "S"
   }
 
+  attribute {
+    name = "userId"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "userId-index"
+    hash_key        = "userId"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = false
   }
@@ -109,7 +120,10 @@ resource "aws_iam_role_policy" "dynamodb_access" {
           "dynamodb:Query",
           "dynamodb:Scan"
         ]
-        Resource = aws_dynamodb_table.expenses.arn
+        Resource = [
+          aws_dynamodb_table.expenses.arn,
+          "${aws_dynamodb_table.expenses.arn}/index/*"
+        ]
       }
     ]
   })
