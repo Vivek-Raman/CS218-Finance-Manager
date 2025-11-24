@@ -150,7 +150,7 @@ tofu-plan:
 
 tofu-apply:
 	@echo "Applying OpenTofu infrastructure..."
-	@cd infra && tofu apply
+	@cd infra && tofu apply -auto-approve
 	@echo "✓ Infrastructure deployed"
 
 tofu-destroy:

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import TinderCard from "react-tinder-card"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +12,7 @@ import {
 import { ArrowLeft, Settings } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { authenticatedFetch } from "@/lib/utils"
+import { toast } from "sonner"
 import {
   Dialog,
   DialogContent,
@@ -75,7 +76,6 @@ export function CategorizeExpenses() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
-  const [lastDirection, setLastDirection] = useState<string>("")
   const [selectedCategory, setSelectedCategory] = useState<string>("")
   const [swipeCategories, setSwipeCategories] = useState<Record<string, string>>({
     left: "Food & Dining",
@@ -84,6 +84,14 @@ export function CategorizeExpenses() {
     down: "Entertainment",
   })
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [lastEvaluatedKey, setLastEvaluatedKey] = useState<string | null>(null)
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false)
+  const [totalCount, setTotalCount] = useState<number | null>(null)
+  const [swipedCount, setSwipedCount] = useState<number>(0)
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const overlayRef = useRef<HTMLDivElement | null>(null)
+  const overlayContentRef = useRef<HTMLDivElement | null>(null)
+  const currentDirectionRef = useRef<string | null>(null)
 
   // Fetch expenses from API
   useEffect(() => {
@@ -93,7 +101,7 @@ export function CategorizeExpenses() {
       
       try {
         const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
-        const endpoint = `${apiUrl}/api/expenses?uncategorized=true`
+        const endpoint = `${apiUrl}/api/expenses?categorized=false&limit=50`
         
         const response = await authenticatedFetch(endpoint, {
           method: 'GET',
@@ -116,6 +124,11 @@ export function CategorizeExpenses() {
         }))
         
         setExpenses(uncategorizedExpenses)
+        setLastEvaluatedKey(result.lastEvaluatedKey || null)
+        // Set total count only on initial load (when it's provided)
+        if (result.totalCount !== null && result.totalCount !== undefined) {
+          setTotalCount(result.totalCount)
+        }
       } catch (err) {
         console.error("Error fetching expenses:", err)
         setError(err instanceof Error ? err.message : 'Failed to fetch expenses')
@@ -128,7 +141,9 @@ export function CategorizeExpenses() {
   }, [])
 
   const handleSwipe = (direction: string, expense: Expense) => {
-    setLastDirection(direction)
+    // Clear swipe direction indicator immediately when swipe completes
+    updateOverlay(null, null)
+    currentDirectionRef.current = null
     
     switch (direction) {
       case "left":
@@ -151,6 +166,9 @@ export function CategorizeExpenses() {
     setExpenses((prevExpenses) =>
       prevExpenses.filter((e) => e.id !== expense.id)
     )
+    
+    // Increment swiped count
+    setSwipedCount((prev) => prev + 1)
   }
 
   const updateExpenseCategory = async (expenseId: string, category: string) => {
@@ -176,10 +194,11 @@ export function CategorizeExpenses() {
       
       const result = await response.json()
       console.log('Expense categorized successfully', result)
+      toast.success("Expense categorized successfully")
     } catch (err) {
       console.error("Error updating expense category:", err)
-      // Don't throw - allow UI to continue even if update fails
-      // In a production app, you might want to show a toast notification
+      toast.error("Failed to categorize expense")
+      throw err
     }
   }
 
@@ -207,8 +226,35 @@ export function CategorizeExpenses() {
     await updateExpenseCategory(expense.id, category)
   }
 
-  const handleCategorySelect = (category: string) => {
-    setSelectedCategory(category)
+  const handleCategorySelect = async (category: string) => {
+    if (expenses.length === 0) {
+      return
+    }
+
+    // Get the top card (first expense in the stack)
+    const topExpense = expenses[0]
+    
+    try {
+      // Update the expense category via API
+      await updateExpenseCategory(topExpense.id, category)
+      
+      // Wait 1 second before removing the card
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Remove the card from the stack
+      setExpenses((prevExpenses) =>
+        prevExpenses.filter((e) => e.id !== topExpense.id)
+      )
+      
+      // Reset selected category
+      setSelectedCategory("")
+      
+      // Increment swiped count
+      setSwipedCount((prev) => prev + 1)
+    } catch (err) {
+      // Error already handled in updateExpenseCategory with toast
+      // Don't remove card if API call failed
+    }
   }
 
   const handleSwipeCategoryChange = (direction: string, category: string) => {
@@ -220,6 +266,198 @@ export function CategorizeExpenses() {
 
   const handleCardLeftScreen = (expenseId: string) => {
     console.log(`Card ${expenseId} left the screen`)
+    // Hide overlay by directly manipulating DOM
+    if (overlayRef.current) {
+      overlayRef.current.style.display = 'none'
+    }
+    currentDirectionRef.current = null
+  }
+
+  // Update overlay directly without React re-renders
+  const updateOverlay = (direction: string | null, category: string | null) => {
+    if (!overlayRef.current || !overlayContentRef.current) return
+    
+    if (direction && category) {
+      overlayContentRef.current.textContent = category
+      overlayRef.current.style.display = 'block'
+    } else {
+      overlayRef.current.style.display = 'none'
+    }
+  }
+
+  // Track swipe direction in real-time by monitoring the top card's transform
+  // Update overlay directly via DOM to avoid React re-renders that interrupt drag
+  useEffect(() => {
+    if (expenses.length === 0) {
+      updateOverlay(null, null)
+      currentDirectionRef.current = null
+      return
+    }
+
+    const topCardId = expenses[0].id
+    let animationFrameId: number | null = null
+    let lastDirection: string | null = null
+
+    const checkSwipeDirection = () => {
+      try {
+        // Find the TinderCard wrapper element (it's a direct child of our wrapper div)
+        const wrapperDiv = cardRefs.current[topCardId]
+        if (!wrapperDiv || !wrapperDiv.isConnected) {
+          if (lastDirection !== null) {
+            updateOverlay(null, null)
+            lastDirection = null
+            currentDirectionRef.current = null
+          }
+          return
+        }
+
+        // TinderCard creates a wrapper div as the first child, check it and its children
+        const tinderCardElement = wrapperDiv.firstElementChild as HTMLElement
+        if (!tinderCardElement || !tinderCardElement.isConnected) {
+          if (lastDirection !== null) {
+            updateOverlay(null, null)
+            lastDirection = null
+            currentDirectionRef.current = null
+          }
+          return
+        }
+
+        // Get computed style to check transform
+        const transform = window.getComputedStyle(tinderCardElement).transform
+        if (!transform || transform === 'none' || transform === 'matrix(1, 0, 0, 1, 0, 0)') {
+          if (lastDirection !== null) {
+            updateOverlay(null, null)
+            lastDirection = null
+            currentDirectionRef.current = null
+          }
+          return
+        }
+
+        // Parse matrix transform: matrix(a, b, c, d, tx, ty)
+        // tx is x translation, ty is y translation
+        const matrixMatch = transform.match(/matrix\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/)
+        if (!matrixMatch) {
+          if (lastDirection !== null) {
+            updateOverlay(null, null)
+            lastDirection = null
+            currentDirectionRef.current = null
+          }
+          return
+        }
+
+        const tx = parseFloat(matrixMatch[5]) || 0
+        const ty = parseFloat(matrixMatch[6]) || 0
+
+        // Deadzone threshold - overlay only shows after swiping this distance
+        const overlayThreshold = 80
+        // Minimum threshold for detecting swipe direction
+        const directionThreshold = 30
+        
+        let newDirection: string | null = null
+        
+        // Check if we've swiped far enough to show overlay
+        const swipeDistance = Math.sqrt(tx * tx + ty * ty)
+        if (swipeDistance < overlayThreshold) {
+          // Not far enough, don't show overlay
+          if (lastDirection !== null) {
+            updateOverlay(null, null)
+            lastDirection = null
+            currentDirectionRef.current = null
+          }
+          return
+        }
+        
+        // Determine direction based on position
+        if (Math.abs(tx) > Math.abs(ty)) {
+          if (tx < -directionThreshold) {
+            newDirection = 'left'
+          } else if (tx > directionThreshold) {
+            newDirection = 'right'
+          }
+        } else {
+          if (ty < -directionThreshold) {
+            newDirection = 'up'
+          } else if (ty > directionThreshold) {
+            newDirection = 'down'
+          }
+        }
+
+        // Only update overlay if direction changed - direct DOM manipulation, no React re-render
+        if (newDirection !== lastDirection) {
+          if (newDirection) {
+            updateOverlay(newDirection, swipeCategories[newDirection])
+          } else {
+            updateOverlay(null, null)
+          }
+          lastDirection = newDirection
+          currentDirectionRef.current = newDirection
+        }
+      } catch (error) {
+        // Silently handle errors to prevent crashes
+        console.debug('Error checking swipe direction:', error)
+        if (lastDirection !== null) {
+          updateOverlay(null, null)
+          lastDirection = null
+          currentDirectionRef.current = null
+        }
+      }
+    }
+
+    const loop = () => {
+      checkSwipeDirection()
+      animationFrameId = requestAnimationFrame(loop)
+    }
+
+    animationFrameId = requestAnimationFrame(loop)
+
+    return () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId)
+      }
+    }
+  }, [expenses, swipeCategories])
+
+  const loadMoreExpenses = async () => {
+    if (!lastEvaluatedKey || isLoadingMore) {
+      return
+    }
+
+    setIsLoadingMore(true)
+    setError(null)
+
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
+      const endpoint = `${apiUrl}/api/expenses?categorized=false&limit=50&lastEvaluatedKey=${encodeURIComponent(lastEvaluatedKey)}`
+
+      const response = await authenticatedFetch(endpoint, {
+        method: 'GET',
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }))
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+      }
+
+      const result = await response.json()
+      const backendExpenses = result.data || []
+
+      // Transform backend data structure to frontend format
+      const newExpenses = backendExpenses.map((exp: any) => ({
+        id: exp.id,
+        description: exp.summary || '',
+        amount: exp.amount || 0,
+        date: exp.timestamp || '',
+      }))
+
+      // Append new expenses to existing list
+      setExpenses((prevExpenses) => [...prevExpenses, ...newExpenses])
+      setLastEvaluatedKey(result.lastEvaluatedKey || null)
+    } catch (err) {
+      console.error("Error loading more expenses:", err)
+      setError(err instanceof Error ? err.message : 'Failed to load more expenses')
+    } finally {
+      setIsLoadingMore(false)
+    }
   }
 
   return (
@@ -237,6 +475,11 @@ export function CategorizeExpenses() {
             <h1 className="text-4xl font-bold tracking-tight">Categorize Expenses</h1>
             <p className="text-muted-foreground mt-2">
               Swipe to categorize your expenses
+              {totalCount !== null ? (
+                <> • {totalCount - swipedCount} expense{totalCount - swipedCount !== 1 ? "s" : ""} remaining</>
+              ) : expenses.length > 0 ? (
+                <> • {expenses.length} expense{expenses.length !== 1 ? "s" : ""} remaining</>
+              ) : null}
             </p>
           </div>
           <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
@@ -347,13 +590,6 @@ export function CategorizeExpenses() {
           </div>
         )}
 
-        {lastDirection && (
-          <div className="mb-4 p-3 bg-muted rounded-md text-sm">
-            Last swipe: <strong>{lastDirection}</strong> → {swipeCategories[lastDirection]}
-          </div>
-        )}
-
-
         {isLoading ? (
           <Card>
             <CardHeader>
@@ -365,7 +601,7 @@ export function CategorizeExpenses() {
               </p>
             </CardContent>
           </Card>
-        ) : expenses.length === 0 ? (
+        ) : expenses.length === 0 && !lastEvaluatedKey ? (
           <Card>
             <CardHeader>
               <CardTitle>All Done!</CardTitle>
@@ -381,11 +617,55 @@ export function CategorizeExpenses() {
               </Button>
             </CardContent>
           </Card>
+        ) : expenses.length === 0 && lastEvaluatedKey ? (
+          <div className="text-center">
+            <Card>
+              <CardHeader>
+                <CardTitle>Ready to Categorize</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground mb-4">
+                  Click below to load expenses for categorization.
+                </p>
+                <Button
+                  onClick={loadMoreExpenses}
+                  disabled={isLoadingMore}
+                  size="lg"
+                >
+                  {isLoadingMore ? "Loading..." : "Load Expenses"}
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
         ) : (
-          <div className="relative h-[600px] w-full select-none">
-            {expenses.map((expense, index) => (
+          <div className="relative">
+            {/* Swipe indicator overlay - positioned above card container, updated via DOM to avoid React re-renders */}
+            <div 
+              ref={overlayRef}
+              className="absolute -top-16 left-1/2 -translate-x-1/2 z-[100]" 
+              style={{ 
+                display: 'none',
+                pointerEvents: 'none',
+                touchAction: 'none',
+                willChange: 'opacity',
+                userSelect: 'none'
+              }}
+            >
+              <div 
+                ref={overlayContentRef}
+                className="bg-primary text-primary-foreground px-6 py-3 rounded-full shadow-lg text-lg font-semibold"
+              >
+              </div>
+            </div>
+            <div className="relative h-[600px] w-full select-none">
+              {expenses.map((expense, index) => (
               <div
                 key={expense.id}
+                ref={(el) => {
+                  if (index === 0) {
+                    cardRefs.current[expense.id] = el
+                  }
+                }}
                 className="absolute w-full select-none"
                 style={{
                   zIndex: expenses.length - index,
@@ -397,11 +677,13 @@ export function CategorizeExpenses() {
                   preventSwipe={[]}
                   className="w-full select-none"
                 >
-                  <Card className="h-[500px] flex flex-col shadow-lg cursor-grab active:cursor-grabbing select-none">
-                  <CardHeader>
+                  <Card className={`h-[500px] flex flex-col cursor-grab active:cursor-grabbing select-none ${
+                    index === 0 ? 'shadow-lg' : index === 1 ? 'shadow-md' : index === 2 ? 'shadow-sm' : 'shadow-none'
+                  }`}>
+                  <CardHeader className="pb-6">
                     <CardTitle className="text-2xl">{expense.description}</CardTitle>
                   </CardHeader>
-                  <CardContent className="flex-1 flex flex-col justify-center items-center">
+                  <CardContent className="flex-1 flex flex-col justify-center items-center pb-6">
                     <div className="text-5xl font-bold mb-4">
                       ${expense.amount.toFixed(2)}
                     </div>
@@ -409,9 +691,6 @@ export function CategorizeExpenses() {
                       {formatDate(expense.date)}
                     </div>
                     <div className="w-full max-w-md mb-8">
-                      <label className="text-sm text-muted-foreground mb-2 block text-center">
-                        Select Category
-                      </label>
                       <Select
                         value={selectedCategory}
                         onValueChange={handleCategorySelect}
@@ -428,35 +707,14 @@ export function CategorizeExpenses() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="grid grid-cols-2 gap-4 w-full max-w-md">
-                      <div className="text-center p-4 bg-muted rounded-lg">
-                        <div className="text-xs text-muted-foreground mb-1">Swipe Left</div>
-                        <div className="font-semibold">{swipeCategories.left}</div>
-                      </div>
-                      <div className="text-center p-4 bg-muted rounded-lg">
-                        <div className="text-xs text-muted-foreground mb-1">Swipe Right</div>
-                        <div className="font-semibold">{swipeCategories.right}</div>
-                      </div>
-                      <div className="text-center p-4 bg-muted rounded-lg">
-                        <div className="text-xs text-muted-foreground mb-1">Swipe Up</div>
-                        <div className="font-semibold">{swipeCategories.up}</div>
-                      </div>
-                      <div className="text-center p-4 bg-muted rounded-lg">
-                        <div className="text-xs text-muted-foreground mb-1">Swipe Down</div>
-                        <div className="font-semibold">{swipeCategories.down}</div>
-                      </div>
-                    </div>
                   </CardContent>
                 </Card>
               </TinderCard>
               </div>
             ))}
+            </div>
           </div>
         )}
-
-        <div className="mt-6 text-center text-sm text-muted-foreground">
-          {expenses.length} expense{expenses.length !== 1 ? "s" : ""} remaining
-        </div>
       </div>
     </div>
   )

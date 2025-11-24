@@ -131,7 +131,31 @@ exports.handler = async (event) => {
   console.log('Ingest handler invoked', {
     requestId: event.requestContext?.requestId,
     timestamp: new Date().toISOString(),
+    bodyLength: event.body?.length || 0,
+    isBase64Encoded: event.isBase64Encoded || false,
   });
+
+  // Check for payload size issues (API Gateway has 10MB limit)
+  const maxPayloadSize = 10 * 1024 * 1024; // 10 MB
+  const bodySize = event.body ? (event.isBase64Encoded 
+    ? Buffer.from(event.body, 'base64').length 
+    : Buffer.byteLength(event.body, 'utf8')) : 0;
+  
+  if (bodySize > maxPayloadSize) {
+    console.error('Payload size exceeds API Gateway limit', {
+      bodySize: bodySize,
+      maxSize: maxPayloadSize,
+    });
+    return {
+      statusCode: 413,
+      headers,
+      body: JSON.stringify({
+        message: `File size exceeds maximum allowed size of ${Math.round(maxPayloadSize / 1024 / 1024)} MB. Please use a smaller file or contact support for direct S3 upload options.`,
+        maxSizeMB: Math.round(maxPayloadSize / 1024 / 1024),
+        receivedSizeMB: Math.round(bodySize / 1024 / 1024),
+      }),
+    };
+  }
 
   // Extract user ID from event
   const userId = getUserId(event);
@@ -155,7 +179,21 @@ exports.handler = async (event) => {
       console.error('Error parsing multipart/form-data', {
         error: parseError.message,
         contentType: event.headers['content-type'] || event.headers['Content-Type'],
+        bodyLength: event.body?.length || 0,
       });
+      
+      // Check if error might be due to payload size
+      if (bodySize >= maxPayloadSize * 0.95) { // Within 5% of limit
+        return {
+          statusCode: 413,
+          headers,
+          body: JSON.stringify({
+            message: `File size may be too large. Maximum allowed size is ${Math.round(maxPayloadSize / 1024 / 1024)} MB.`,
+            maxSizeMB: Math.round(maxPayloadSize / 1024 / 1024),
+          }),
+        };
+      }
+      
       return {
         statusCode: 400,
         headers,

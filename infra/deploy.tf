@@ -321,6 +321,8 @@ resource "aws_lambda_function" "ingest" {
   handler         = "ingest.handler"
   source_code_hash = data.archive_file.ingest_zip.output_base64sha256
   runtime         = "nodejs20.x"
+  timeout         = 300  # 5 minutes for large CSV processing
+  memory_size     = 512  # 512 MB for parsing large CSV files
 
   environment {
     variables = {

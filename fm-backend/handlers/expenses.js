@@ -81,15 +81,37 @@ exports.handler = async (event) => {
   try {
     switch (method) {
       case 'GET': {
-        // Get expenses for the authenticated user, optionally filtered by uncategorized status
+        // Get expenses for the authenticated user, optionally filtered by categorized status
         const queryParams = event.queryStringParameters || {};
-        const uncategorized = queryParams.uncategorized === 'true';
+        const categorizedParam = queryParams.categorized;
+        const categorized = categorizedParam === 'true';
+        const uncategorized = categorizedParam === 'false';
+        
+        // Parse pagination parameters
+        let limit = queryParams.limit ? parseInt(queryParams.limit, 10) : 20;
+        // Cap limit to maximum of 50
+        limit = Math.min(limit, 50);
+        let exclusiveStartKey = null;
+        
+        // Parse lastEvaluatedKey if provided (base64 encoded JSON)
+        // This is DynamoDB's cursor for pagination - required for efficient server-side pagination
+        if (queryParams.lastEvaluatedKey) {
+          try {
+            exclusiveStartKey = JSON.parse(Buffer.from(queryParams.lastEvaluatedKey, 'base64').toString('utf-8'));
+          } catch (e) {
+            console.warn('Failed to parse lastEvaluatedKey', {
+              error: e.message,
+              lastEvaluatedKey: queryParams.lastEvaluatedKey,
+            });
+          }
+        }
         
         console.log('Querying expenses table', {
           tableName: TABLE_NAME,
           userId: userId,
-          uncategorized: uncategorized,
-          queryParams: queryParams,
+          categorized: categorizedParam,
+          limit: limit,
+          hasExclusiveStartKey: !!exclusiveStartKey,
         });
         
         // Build query command using GSI to filter by userId
@@ -100,21 +122,82 @@ exports.handler = async (event) => {
           ExpressionAttributeValues: {
             ':userId': userId,
           },
+          Limit: limit,
         };
         
-        // Filter for expenses without categorizedAt attribute
-        if (uncategorized) {
-          queryParams_dynamo.FilterExpression = 'attribute_not_exists(categorizedAt)';
+        // Add ExclusiveStartKey if provided for pagination
+        if (exclusiveStartKey) {
+          queryParams_dynamo.ExclusiveStartKey = exclusiveStartKey;
         }
         
+        // Filter based on categorized parameter
+        if (uncategorized) {
+          queryParams_dynamo.FilterExpression = 'attribute_not_exists(categorizedAt)';
+        } else if (categorized) {
+          queryParams_dynamo.FilterExpression = 'attribute_exists(categorizedAt)';
+        }
+        
+        // Fetch expenses
         const queryResult = await dynamodb.send(new QueryCommand(queryParams_dynamo));
         
         const itemCount = queryResult.Items?.length || 0;
+        let lastEvaluatedKey = null;
+        
+        // Encode LastEvaluatedKey as base64 JSON string if present
+        if (queryResult.LastEvaluatedKey) {
+          lastEvaluatedKey = Buffer.from(JSON.stringify(queryResult.LastEvaluatedKey)).toString('base64');
+        }
+        
+        // Get total count (only when not paginating)
+        let totalCount = null;
+        if (!exclusiveStartKey) {
+          // Build count query with same filters
+          const countParams = {
+            TableName: TABLE_NAME,
+            IndexName: 'userId-index',
+            KeyConditionExpression: 'userId = :userId',
+            ExpressionAttributeValues: {
+              ':userId': userId,
+            },
+            Select: 'COUNT',
+          };
+          
+          // Apply same filter expression
+          if (uncategorized) {
+            countParams.FilterExpression = 'attribute_not_exists(categorizedAt)';
+          } else if (categorized) {
+            countParams.FilterExpression = 'attribute_exists(categorizedAt)';
+          }
+          
+          // DynamoDB count queries may need pagination if there are many items
+          let count = 0;
+          let countExclusiveStartKey = null;
+          
+          do {
+            if (countExclusiveStartKey) {
+              countParams.ExclusiveStartKey = countExclusiveStartKey;
+            }
+            
+            const countResult = await dynamodb.send(new QueryCommand(countParams));
+            count += countResult.Count || 0;
+            countExclusiveStartKey = countResult.LastEvaluatedKey;
+          } while (countExclusiveStartKey);
+          
+          totalCount = count;
+          
+          console.log('Total count retrieved', {
+            totalCount: totalCount,
+            categorized: categorizedParam,
+            userId: userId,
+          });
+        }
+        
         console.log('Expenses retrieved successfully', {
           itemCount: itemCount,
           scannedCount: queryResult.ScannedCount,
-          uncategorized: uncategorized,
+          categorized: categorizedParam,
           userId: userId,
+          totalCount: totalCount,
         });
         
         return {
@@ -123,6 +206,8 @@ exports.handler = async (event) => {
           body: JSON.stringify({
             message: 'Expenses retrieved successfully',
             data: queryResult.Items || [],
+            lastEvaluatedKey: lastEvaluatedKey,
+            totalCount: totalCount,
           }),
         };
       }

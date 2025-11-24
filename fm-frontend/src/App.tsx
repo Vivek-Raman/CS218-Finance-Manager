@@ -5,6 +5,7 @@ import { Dashboard } from "@/components/Dashboard"
 import { CategorizeExpenses } from "@/pages/CategorizeExpenses"
 import { IngestCSV } from "@/pages/IngestCSV"
 import { Login } from "@/components/Login"
+import { Toaster } from "@/components/ui/sonner"
 
 // Protected Route Component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -136,6 +137,7 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <AppRoutes />
+        <Toaster />
       </AuthProvider>
     </BrowserRouter>
   )

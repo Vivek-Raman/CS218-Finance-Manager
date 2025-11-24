@@ -12,12 +12,13 @@
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
     "@react-spring/web": "^9.7.5",
-    "amazon-cognito-identity-js": "^7.3.7",
+    "amazon-cognito-identity-js": "^6.3.16",
     "papaparse": "^5.4.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.6",
-    "react-tinder-card": "^1.6.4"
+    "react-tinder-card": "^1.6.4",
+    "sonner": "^1.7.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

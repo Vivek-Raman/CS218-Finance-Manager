@@ -21,6 +21,7 @@ import {
 import { ArrowLeft, Upload, FileText } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { authenticatedFetch } from "@/lib/utils"
+import { toast } from "sonner"
 
 interface FieldMapping {
   summary: string
@@ -76,6 +77,13 @@ export function IngestCSV() {
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
+      // Check file size (API Gateway has 10MB limit, use 9MB to account for multipart overhead)
+      const maxFileSize = 9 * 1024 * 1024 // 9 MB
+      if (file.size > maxFileSize) {
+        alert(`File size (${(file.size / 1024 / 1024).toFixed(2)} MB) exceeds the maximum allowed size of ${(maxFileSize / 1024 / 1024).toFixed(0)} MB. Please use a smaller file.`)
+        return
+      }
+      
       // Check if file is CSV by extension or MIME type
       const isCSV = file.name.endsWith('.csv') || 
                     file.type === 'text/csv' || 
@@ -160,6 +168,9 @@ export function IngestCSV() {
       }
 
       await response.json()
+      
+      // Show success toast
+      toast.success("CSV uploaded successfully!")
       
       // Reset form
       setCsvFile(null)
