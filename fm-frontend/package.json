@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
     "@react-spring/web": "^9.7.5",
     "papaparse": "^5.4.1",
     "react": "^19.2.0",

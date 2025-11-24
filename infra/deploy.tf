@@ -111,6 +111,7 @@ resource "aws_iam_role_policy" "dynamodb_access" {
         Action = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
           "dynamodb:Query",
           "dynamodb:Scan"
         ]
@@ -432,6 +433,13 @@ resource "aws_apigatewayv2_route" "expenses_get" {
 resource "aws_apigatewayv2_route" "expenses_post" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "POST /api/expenses"
+  target    = "integrations/${aws_apigatewayv2_integration.expenses.id}"
+}
+
+# API Gateway route for expenses PUT
+resource "aws_apigatewayv2_route" "expenses_put" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "PUT /api/expenses"
   target    = "integrations/${aws_apigatewayv2_integration.expenses.id}"
 }
 
