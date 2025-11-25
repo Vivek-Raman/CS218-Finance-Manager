@@ -12,6 +12,7 @@ const sqs = new SQSClient({});
 const s3 = new S3Client({});
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+const ANALYSIS_QUEUE_URL = process.env.ANALYSIS_QUEUE_URL;
 
 const headers = {
   'Content-Type': 'application/json',
@@ -427,6 +428,36 @@ exports.handler = async (event) => {
       
       // If some failed, log warning but continue
       console.warn(`Partial failure: ${failed} out of ${rows.length} messages failed to send`);
+    }
+    
+    // Send empty message to analysis delay queue to trigger analysis (if at least some rows were enqueued)
+    // The analysis Lambda will pull data from DB directly, so no payload is needed
+    if (successful > 0 && ANALYSIS_QUEUE_URL) {
+      try {
+        // Send empty message - analysis Lambda will query DB directly
+        const analysisMessageBody = JSON.stringify({
+          triggeredAt: new Date().toISOString(),
+        });
+        
+        console.log('Sending trigger message to analysis delay queue', {
+          queueUrl: ANALYSIS_QUEUE_URL,
+        });
+        
+        await sqs.send(new SendMessageCommand({
+          QueueUrl: ANALYSIS_QUEUE_URL,
+          MessageBody: analysisMessageBody,
+        }));
+        
+        console.log('Analysis delay queue trigger message sent successfully');
+      } catch (analysisQueueError) {
+        // Log error but don't fail the ingest operation
+        console.error('Error sending message to analysis delay queue', {
+          error: analysisQueueError.message,
+          queueUrl: ANALYSIS_QUEUE_URL,
+        });
+      }
+    } else if (!ANALYSIS_QUEUE_URL) {
+      console.warn('ANALYSIS_QUEUE_URL not configured, skipping analysis queue message');
     }
     
     const duration = Date.now() - startTime;

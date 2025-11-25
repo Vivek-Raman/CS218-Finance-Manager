@@ -4,11 +4,16 @@
  */
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const crypto = require('crypto');
 
 const client = new DynamoDBClient({});
 const dynamodb = DynamoDBDocumentClient.from(client);
+const lambdaClient = new LambdaClient({});
 const TABLE_NAME = process.env.EXPENSES_TABLE;
+const ANALYSIS_TABLE = process.env.ANALYSIS_TABLE;
+const APP_NAME = process.env.APP_NAME || 'finance-manager';
+const ANALYZE_EXPENSES_FUNCTION_NAME = `${APP_NAME}-analyze-expenses`;
 
 const headers = {
   'Content-Type': 'application/json',
@@ -51,6 +56,330 @@ function generateHash(userId, summary, timestamp) {
   return crypto.createHash('sha256').update(hashInput).digest('hex');
 }
 
+/**
+ * Get current month in YYYY-MM format
+ */
+function getCurrentMonthYear() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+/**
+ * Handle refresh analytics request - trigger analysis Lambda immediately for the requesting user
+ * The Lambda will process only the specified user
+ */
+async function handleRefreshAnalytics(userId) {
+  try {
+    console.log('Triggering analytics refresh for user', {
+      userId: userId,
+      functionName: ANALYZE_EXPENSES_FUNCTION_NAME,
+    });
+    
+    // Invoke analyze_expenses Lambda synchronously with userId in payload
+    const invokeParams = {
+      FunctionName: ANALYZE_EXPENSES_FUNCTION_NAME,
+      InvocationType: 'RequestResponse', // Synchronous invocation
+      Payload: JSON.stringify({
+        Records: [
+          {
+            messageId: `manual-refresh-${Date.now()}`,
+            body: JSON.stringify({
+              userId: userId,
+              triggeredAt: new Date().toISOString(),
+              triggeredBy: userId,
+            }),
+          },
+        ],
+      }),
+    };
+    
+    const invokeResult = await lambdaClient.send(new InvokeCommand(invokeParams));
+    
+    // Parse the response
+    const responsePayload = JSON.parse(Buffer.from(invokeResult.Payload).toString());
+    
+    console.log('Analytics refresh completed', {
+      userId: userId,
+      statusCode: invokeResult.StatusCode,
+      functionError: invokeResult.FunctionError,
+      response: responsePayload,
+    });
+    
+    if (invokeResult.FunctionError) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          message: 'Error refreshing analytics',
+          error: responsePayload.errorMessage || invokeResult.FunctionError,
+        }),
+      };
+    }
+    
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        message: 'Analytics refresh triggered successfully',
+        data: {
+          processed: responsePayload.processed || 0,
+          successful: responsePayload.successful || 0,
+          failed: responsePayload.failed || 0,
+        },
+      }),
+    };
+  } catch (error) {
+    console.error('Error triggering analytics refresh', {
+      userId: userId,
+      error: error.message,
+      stack: error.stack,
+    });
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Error triggering analytics refresh',
+        error: error.message,
+      }),
+    };
+  }
+}
+
+/**
+ * Handle analysis request - get expenses by category for current month
+ */
+async function handleAnalysisRequest(userId) {
+  if (!ANALYSIS_TABLE) {
+    console.error('ANALYSIS_TABLE environment variable is not set');
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Analysis table not configured',
+      }),
+    };
+  }
+
+  try {
+    const monthYear = getCurrentMonthYear();
+    const analyticTag = `expense-category-breakdown-month-${monthYear}`;
+    
+    console.log('Fetching analysis data', {
+      userId: userId,
+      analyticTag: analyticTag,
+      tableName: ANALYSIS_TABLE,
+    });
+    
+    const result = await dynamodb.send(new GetCommand({
+      TableName: ANALYSIS_TABLE,
+      Key: {
+        userId: userId,
+        analyticTag: analyticTag,
+      },
+    }));
+    
+    if (!result.Item) {
+      console.log('No analysis data found for current month', {
+        userId: userId,
+        analyticTag: analyticTag,
+      });
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          message: 'No analysis data available for current month',
+          data: null,
+        }),
+      };
+    }
+    
+    console.log('Analysis data retrieved successfully', {
+      userId: userId,
+      analyticTag: analyticTag,
+    });
+    
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        message: 'Analysis data retrieved successfully',
+        data: result.Item.payload || {},
+      }),
+    };
+  } catch (error) {
+    console.error('Error fetching analysis data', {
+      userId: userId,
+      error: error.message,
+      stack: error.stack,
+    });
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Error fetching analysis data',
+        error: error.message,
+      }),
+    };
+  }
+}
+
+/**
+ * Handle all-time analysis request - get expenses by category for all-time
+ */
+async function handleAllTimeAnalysisRequest(userId) {
+  if (!ANALYSIS_TABLE) {
+    console.error('ANALYSIS_TABLE environment variable is not set');
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Analysis table not configured',
+      }),
+    };
+  }
+
+  try {
+    const analyticTag = 'expense-category-breakdown-all-time';
+    
+    console.log('Fetching all-time analysis data', {
+      userId: userId,
+      analyticTag: analyticTag,
+      tableName: ANALYSIS_TABLE,
+    });
+    
+    const result = await dynamodb.send(new GetCommand({
+      TableName: ANALYSIS_TABLE,
+      Key: {
+        userId: userId,
+        analyticTag: analyticTag,
+      },
+    }));
+    
+    if (!result.Item) {
+      console.log('No all-time analysis data found', {
+        userId: userId,
+        analyticTag: analyticTag,
+      });
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          message: 'No all-time analysis data available',
+          data: null,
+        }),
+      };
+    }
+    
+    console.log('All-time analysis data retrieved successfully', {
+      userId: userId,
+      analyticTag: analyticTag,
+    });
+    
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        message: 'All-time analysis data retrieved successfully',
+        data: result.Item.payload || {},
+      }),
+    };
+  } catch (error) {
+    console.error('Error fetching all-time analysis data', {
+      userId: userId,
+      error: error.message,
+      stack: error.stack,
+    });
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Error fetching all-time analysis data',
+        error: error.message,
+      }),
+    };
+  }
+}
+
+/**
+ * Handle monthly trend analysis request - get category-wise monthly trends
+ */
+async function handleMonthlyTrendRequest(userId) {
+  if (!ANALYSIS_TABLE) {
+    console.error('ANALYSIS_TABLE environment variable is not set');
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Analysis table not configured',
+      }),
+    };
+  }
+
+  try {
+    const analyticTag = 'expense-category-monthly-trend';
+    
+    console.log('Fetching monthly trend analysis data', {
+      userId: userId,
+      analyticTag: analyticTag,
+      tableName: ANALYSIS_TABLE,
+    });
+    
+    const result = await dynamodb.send(new GetCommand({
+      TableName: ANALYSIS_TABLE,
+      Key: {
+        userId: userId,
+        analyticTag: analyticTag,
+      },
+    }));
+    
+    if (!result.Item) {
+      console.log('No monthly trend analysis data found', {
+        userId: userId,
+        analyticTag: analyticTag,
+      });
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          message: 'No monthly trend analysis data available',
+          data: null,
+        }),
+      };
+    }
+    
+    console.log('Monthly trend analysis data retrieved successfully', {
+      userId: userId,
+      analyticTag: analyticTag,
+      monthCount: Object.keys(result.Item.payload?.monthlyTrend || {}).length,
+    });
+    
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        message: 'Monthly trend analysis data retrieved successfully',
+        data: result.Item.payload || {},
+      }),
+    };
+  } catch (error) {
+    console.error('Error fetching monthly trend analysis data', {
+      userId: userId,
+      error: error.message,
+      stack: error.stack,
+    });
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        message: 'Error fetching monthly trend analysis data',
+        error: error.message,
+      }),
+    };
+  }
+}
+
 exports.handler = async (event) => {
   const startTime = Date.now();
   const method = event.requestContext?.http?.method || event.httpMethod || 'GET';
@@ -79,6 +408,29 @@ exports.handler = async (event) => {
   }
 
   try {
+    // Check if this is an analysis request
+    const path = event.requestContext?.http?.path || event.path || '';
+    if (method === 'GET' && (path.endsWith('/analysis/monthly-trend') || path.includes('/expenses/analysis/monthly-trend'))) {
+      // Handle monthly trend analysis endpoint
+      return await handleMonthlyTrendRequest(userId);
+    }
+    
+    if (method === 'GET' && (path.endsWith('/analysis/all-time') || path.includes('/expenses/analysis/all-time'))) {
+      // Handle all-time analysis endpoint
+      return await handleAllTimeAnalysisRequest(userId);
+    }
+    
+    if (method === 'GET' && (path.endsWith('/analysis') || path.includes('/expenses/analysis'))) {
+      // Handle analysis endpoint (current month)
+      return await handleAnalysisRequest(userId);
+    }
+    
+    // Check if this is a refresh analytics request
+    if (method === 'POST' && (path.endsWith('/analysis/refresh') || path.includes('/expenses/analysis/refresh'))) {
+      // Handle refresh analytics endpoint
+      return await handleRefreshAnalytics(userId);
+    }
+    
     switch (method) {
       case 'GET': {
         // Get expenses for the authenticated user, optionally filtered by categorized status
@@ -114,7 +466,6 @@ exports.handler = async (event) => {
           hasExclusiveStartKey: !!exclusiveStartKey,
         });
         
-        // Build query command using GSI to filter by userId
         const queryParams_dynamo = {
           TableName: TABLE_NAME,
           IndexName: 'userId-index',
@@ -123,21 +474,19 @@ exports.handler = async (event) => {
             ':userId': userId,
           },
           Limit: limit,
+          ScanIndexForward: false,
         };
         
-        // Add ExclusiveStartKey if provided for pagination
         if (exclusiveStartKey) {
           queryParams_dynamo.ExclusiveStartKey = exclusiveStartKey;
         }
         
-        // Filter based on categorized parameter
         if (uncategorized) {
           queryParams_dynamo.FilterExpression = 'attribute_not_exists(categorizedAt)';
         } else if (categorized) {
           queryParams_dynamo.FilterExpression = 'attribute_exists(categorizedAt)';
         }
         
-        // Fetch expenses
         const queryResult = await dynamodb.send(new QueryCommand(queryParams_dynamo));
         
         const itemCount = queryResult.Items?.length || 0;

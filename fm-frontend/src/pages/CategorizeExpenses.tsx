@@ -115,7 +115,6 @@ export function CategorizeExpenses() {
         const result = await response.json()
         const backendExpenses = result.data || []
         
-        // Transform backend data structure to frontend format
         const uncategorizedExpenses = backendExpenses.map((exp: any) => ({
           id: exp.id,
           description: exp.summary || '',
@@ -441,7 +440,6 @@ export function CategorizeExpenses() {
       const result = await response.json()
       const backendExpenses = result.data || []
 
-      // Transform backend data structure to frontend format
       const newExpenses = backendExpenses.map((exp: any) => ({
         id: exp.id,
         description: exp.summary || '',
@@ -449,8 +447,15 @@ export function CategorizeExpenses() {
         date: exp.timestamp || '',
       }))
 
-      // Append new expenses to existing list
-      setExpenses((prevExpenses) => [...prevExpenses, ...newExpenses])
+      setExpenses((prevExpenses) => {
+        const combined = [...prevExpenses, ...newExpenses];
+        combined.sort((a, b) => {
+          const dateA = a.date || '';
+          const dateB = b.date || '';
+          return dateB.localeCompare(dateA);
+        });
+        return combined;
+      })
       setLastEvaluatedKey(result.lastEvaluatedKey || null)
     } catch (err) {
       console.error("Error loading more expenses:", err)
