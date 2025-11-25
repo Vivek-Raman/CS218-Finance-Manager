@@ -735,6 +735,7 @@ resource "aws_amplify_app" "frontend" {
       phases:
         preBuild:
           commands:
+            - node --version
             - npm ci
         build:
           commands:
@@ -748,6 +749,8 @@ resource "aws_amplify_app" "frontend" {
           - node_modules/**/*
   EOT
 
+  # Rewrite rule for SPA - catch all routes except those with file extensions
+  # Amplify should serve existing files before applying rewrite rules
   custom_rule {
     source = "/<*>"
     status = "200"

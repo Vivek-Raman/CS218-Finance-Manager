@@ -3,6 +3,7 @@ frontend:
   phases:
     preBuild:
       commands:
+        - node --version
         - npm ci
     build:
       commands:
@@ -14,33 +15,9 @@ frontend:
   cache:
     paths:
       - node_modules/**/*
-customHeaders:
-  - pattern: '**/*.js'
-    headers:
-      - key: 'Content-Type'
-        value: 'application/javascript'
-  - pattern: '**/*.css'
-    headers:
-      - key: 'Content-Type'
-        value: 'text/css'
-  - pattern: '**/*.json'
-    headers:
-      - key: 'Content-Type'
-        value: 'application/json'
-  - pattern: '**/*.png'
-    headers:
-      - key: 'Content-Type'
-        value: 'image/png'
-  - pattern: '**/*.jpg'
-    headers:
-      - key: 'Content-Type'
-        value: 'image/jpeg'
-  - pattern: '**/*.svg'
-    headers:
-      - key: 'Content-Type'
-        value: 'image/svg+xml'
-  - pattern: '**/*.ico'
-    headers:
-      - key: 'Content-Type'
-        value: 'image/x-icon'
+  customRedirects:
+    - source: '/<*>'
+      target: '/index.html'
+      status: '200'
+      condition: '!{uri} =~ ".*\\.(js|css|json|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map|webmanifest)$"'
 

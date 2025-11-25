@@ -22,6 +22,7 @@ import { useAuth } from "@/contexts/AuthContext"
 import { useEffect, useState } from "react"
 import { authenticatedFetch, formatDate } from "@/lib/utils"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
+import { toast } from "sonner"
 
 interface Expense {
   id: string
@@ -46,7 +47,7 @@ interface MonthlyTrendData {
 
 export function Dashboard() {
   const navigate = useNavigate()
-  const { signOut } = useAuth()
+  const { signOut, user } = useAuth()
   const [uncategorizedCount, setUncategorizedCount] = useState<number>(0)
   const [isLoadingCount, setIsLoadingCount] = useState<boolean>(true)
   const [allExpenses, setAllExpenses] = useState<Expense[]>([]) // All expenses from API
@@ -329,110 +330,31 @@ export function Dashboard() {
   ]
 
   // Refresh analytics handler
-  const handleRefreshAnalytics = async () => {
+  const handleRefreshAnalytics = () => {
     setIsRefreshingAnalytics(true)
     setRefreshError(null)
     setRefreshSuccess(null)
     
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
-      const endpoint = `${apiUrl}/api/expenses/analysis/refresh`
-      
-      const response = await authenticatedFetch(endpoint, {
-        method: 'POST',
-      })
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }))
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
-      }
-      
-      const result = await response.json()
-      setRefreshSuccess(`Analytics refreshed successfully! Processed: ${result.data?.processed || 0}, Successful: ${result.data?.successful || 0}`)
-      
-      // Refetch both analysis endpoints after successful refresh
-      const fetchAnalysis = async () => {
-        setIsLoadingAnalysis(true)
-        setAnalysisError(null)
-        
-        try {
-          const analysisEndpoint = `${apiUrl}/api/expenses/analysis`
-          const analysisResponse = await authenticatedFetch(analysisEndpoint, {
-            method: 'GET',
-          })
-          
-          if (analysisResponse.ok) {
-            const analysisResult = await analysisResponse.json()
-            if (analysisResult.data) {
-              setAnalysisData(analysisResult.data)
-            }
-          }
-        } catch (err) {
-          console.error("Error refetching analysis:", err)
-        } finally {
-          setIsLoadingAnalysis(false)
-        }
-      }
-
-      const fetchAllTimeAnalysis = async () => {
-        setIsLoadingAllTimeAnalysis(true)
-        setAllTimeAnalysisError(null)
-        
-        try {
-          const allTimeEndpoint = `${apiUrl}/api/expenses/analysis/all-time`
-          const allTimeResponse = await authenticatedFetch(allTimeEndpoint, {
-            method: 'GET',
-          })
-          
-          if (allTimeResponse.ok) {
-            const allTimeResult = await allTimeResponse.json()
-            if (allTimeResult.data) {
-              setAllTimeAnalysisData(allTimeResult.data)
-            }
-          }
-        } catch (err) {
-          console.error("Error refetching all-time analysis:", err)
-        } finally {
-          setIsLoadingAllTimeAnalysis(false)
-        }
-      }
-
-      const fetchMonthlyTrend = async () => {
-        setIsLoadingMonthlyTrend(true)
-        setMonthlyTrendError(null)
-        
-        try {
-          const monthlyTrendEndpoint = `${apiUrl}/api/expenses/analysis/monthly-trend`
-          const monthlyTrendResponse = await authenticatedFetch(monthlyTrendEndpoint, {
-            method: 'GET',
-          })
-          
-          if (monthlyTrendResponse.ok) {
-            const monthlyTrendResult = await monthlyTrendResponse.json()
-            if (monthlyTrendResult.data) {
-              setMonthlyTrendData(monthlyTrendResult.data)
-            }
-          }
-        } catch (err) {
-          console.error("Error refetching monthly trend:", err)
-        } finally {
-          setIsLoadingMonthlyTrend(false)
-        }
-      }
-
-      // Refetch all analyses in parallel
-      await Promise.all([fetchAnalysis(), fetchAllTimeAnalysis(), fetchMonthlyTrend()])
-      
-      // Clear success message after 5 seconds
-      setTimeout(() => {
-        setRefreshSuccess(null)
-      }, 5000)
-    } catch (err) {
+    const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
+    const endpoint = `${apiUrl}/api/expenses/analysis/refresh`
+    
+    // Fire and forget - don't await the API call
+    authenticatedFetch(endpoint, {
+      method: 'POST',
+    }).catch((err) => {
       console.error("Error refreshing analytics:", err)
-      setRefreshError(err instanceof Error ? err.message : 'Failed to refresh analytics')
-    } finally {
+    })
+    
+    // Pretend to load for 1s, then show success toast
+    setTimeout(() => {
       setIsRefreshingAnalytics(false)
-    }
+      toast.success("Analytics refresh initiated successfully!")
+      
+      // Wait 3s more, then reload the page
+      setTimeout(() => {
+        window.location.reload()
+      }, 3000)
+    }, 1000)
   }
 
   return (
@@ -445,10 +367,17 @@ export function Dashboard() {
               Manage your finances with ease
             </p>
           </div>
-          <Button onClick={handleLogout} variant="outline" className="flex items-center gap-2">
-            <LogOut className="h-4 w-4" />
-            Logout
-          </Button>
+          <div className="flex items-center gap-3">
+            {user && (
+              <span className="text-sm text-muted-foreground">
+                {user.username || user.name || user.email || 'User'}
+              </span>
+            )}
+            <Button onClick={handleLogout} variant="outline" className="flex items-center gap-2">
+              <LogOut className="h-4 w-4" />
+              Logout
+            </Button>
+          </div>
         </div>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -492,10 +421,10 @@ export function Dashboard() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <RefreshCw className="h-6 w-6 text-primary" />
-                <CardTitle>Refresh Analytics</CardTitle>
+                <CardTitle>Analyze Expenditure</CardTitle>
               </div>
               <CardDescription>
-                Manually trigger analytics recalculation for all expenses
+                Analyze and recalculate expenditure analytics for all expenses
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -507,12 +436,12 @@ export function Dashboard() {
                 {isRefreshingAnalytics ? (
                   <>
                     <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    Refreshing...
+                    Analyzing...
                   </>
                 ) : (
                   <>
                     <RefreshCw className="h-4 w-4 mr-2" />
-                    Refresh Analytics
+                    Analyze Expenditure
                   </>
                 )}
               </Button>
