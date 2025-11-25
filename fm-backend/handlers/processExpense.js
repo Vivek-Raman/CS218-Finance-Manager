@@ -59,7 +59,7 @@ exports.handler = async (event) => {
         throw new Error(`Failed to parse SQS message body as JSON: ${parseError.message}. Body: ${record.body?.substring(0, 200)}`);
       }
       
-      const { userId, summary, amount, timestamp, s3Key } = messageBody;
+      const { userId, summary, amount, timestamp, s3Key, category } = messageBody;
       
       console.log('Parsed SQS message', {
         messageId: record.messageId,
@@ -71,6 +71,8 @@ exports.handler = async (event) => {
         amount: amount,
         hasTimestamp: !!timestamp,
         timestamp: timestamp,
+        hasCategory: !!category,
+        category: category,
         s3Key: s3Key,
         messageBodyKeys: Object.keys(messageBody || {}),
       });
@@ -172,6 +174,12 @@ exports.handler = async (event) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+      
+      // If category is provided, add it and set categorizedAt
+      if (category && typeof category === 'string' && category.trim() !== '') {
+        expense.category = category.trim();
+        expense.categorizedAt = new Date().toISOString();
+      }
       
       // Save to DynamoDB
       console.log('Saving expense to DynamoDB', {

@@ -27,12 +27,14 @@ interface FieldMapping {
   summary: string
   amount: string
   timestamp: string
+  category?: string
 }
 
 const HEADER_MAPPINGS = {
   summary: ['Description', 'Summary', 'Note', 'Detail'],
   amount: ['Amount', 'Value', 'Price'],
-  timestamp: ['Trans. Date', 'Date', 'Time', 'Timestamp']
+  timestamp: ['Trans. Date', 'Date', 'Time', 'Timestamp'],
+  category: ['Category']
 }
 
 export function IngestCSV() {
@@ -44,6 +46,7 @@ export function IngestCSV() {
     summary: "",
     amount: "",
     timestamp: "",
+    category: "",
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -52,6 +55,7 @@ export function IngestCSV() {
       summary: "",
       amount: "",
       timestamp: "",
+      category: "",
     }
 
     // Helper function to find matching header (case-insensitive)
@@ -70,6 +74,7 @@ export function IngestCSV() {
     mapping.summary = findMatchingHeader(HEADER_MAPPINGS.summary)
     mapping.amount = findMatchingHeader(HEADER_MAPPINGS.amount)
     mapping.timestamp = findMatchingHeader(HEADER_MAPPINGS.timestamp)
+    mapping.category = findMatchingHeader(HEADER_MAPPINGS.category)
 
     return mapping
   }
@@ -180,6 +185,7 @@ export function IngestCSV() {
         summary: "",
         amount: "",
         timestamp: "",
+        category: "",
       })
       
       // Navigate back to dashboard
@@ -346,6 +352,28 @@ export function IngestCSV() {
                       <SelectValue placeholder="Select CSV column for timestamp" />
                     </SelectTrigger>
                     <SelectContent>
+                      {getSelectOptions().map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Category <span className="text-muted-foreground text-xs">(optional)</span>
+                  </label>
+                  <Select
+                    value={fieldMapping.category === "" ? "__none__" : (fieldMapping.category || undefined)}
+                    onValueChange={(value) => handleMappingChange("category", value === "__none__" ? "" : value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select CSV column for category (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None (leave empty)</SelectItem>
                       {getSelectOptions().map((option) => (
                         <SelectItem key={option} value={option}>
                           {option}

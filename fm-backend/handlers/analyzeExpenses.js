@@ -126,7 +126,6 @@ async function getUserExpensesAllTime(userId) {
  */
 function calculateCategoryBreakdown(expenses) {
   const breakdown = {};
-  let totalAmount = 0;
   
   expenses.forEach(expense => {
     const category = expense.category || 'Uncategorized';
@@ -137,8 +136,10 @@ function calculateCategoryBreakdown(expenses) {
     }
     
     breakdown[category] += amount;
-    totalAmount += amount;
   });
+
+  // Calculate total from category breakdown to ensure consistency
+  const totalAmount = Object.values(breakdown).reduce((sum, amount) => sum + amount, 0);
 
   return {
     categoryBreakdown: breakdown,

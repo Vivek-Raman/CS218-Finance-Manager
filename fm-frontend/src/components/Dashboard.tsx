@@ -49,15 +49,18 @@ export function Dashboard() {
   const { signOut } = useAuth()
   const [uncategorizedCount, setUncategorizedCount] = useState<number>(0)
   const [isLoadingCount, setIsLoadingCount] = useState<boolean>(true)
-  const [expenses, setExpenses] = useState<Expense[]>([])
+  const [allExpenses, setAllExpenses] = useState<Expense[]>([]) // All expenses from API
   const [isLoadingExpenses, setIsLoadingExpenses] = useState<boolean>(true)
   const [expensesError, setExpensesError] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [itemsPerPage, setItemsPerPage] = useState<number>(5)
-  const [totalCount, setTotalCount] = useState<number | null>(null)
-  // Store cursors for each page to support bidirectional navigation with DynamoDB
-  // pageCursors[n] stores the cursor needed to fetch page n+1
-  const [pageCursors, setPageCursors] = useState<Record<number, string | null>>({})
+  
+  // Calculate paginated expenses from allExpenses
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = startIndex + itemsPerPage
+  const expenses = allExpenses.slice(startIndex, endIndex)
+  const totalCount = allExpenses.length
+  const totalPages = Math.ceil(totalCount / itemsPerPage)
   const [analysisData, setAnalysisData] = useState<AnalysisData | null>(null)
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState<boolean>(true)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
@@ -214,7 +217,7 @@ export function Dashboard() {
     fetchMonthlyTrend()
   }, [])
 
-  // Fetch categorized expenses from API - only fetch current page
+  // Fetch ALL categorized expenses from API - pagination handled client-side
   useEffect(() => {
     const fetchExpenses = async () => {
       setIsLoadingExpenses(true)
@@ -223,18 +226,10 @@ export function Dashboard() {
       try {
         const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
         
-        // Build query parameters
+        // Build query parameters - no pagination params needed
         const params = new URLSearchParams({
           categorized: 'true',
-          limit: Math.min(itemsPerPage, 50).toString(),
         })
-        
-        // Add lastEvaluatedKey if we're not on page 1
-        // Use the cursor stored for the previous page
-        const cursorForPage = currentPage > 1 ? pageCursors[currentPage - 1] : null
-        if (cursorForPage) {
-          params.append('lastEvaluatedKey', cursorForPage)
-        }
         
         const endpoint = `${apiUrl}/api/expenses?${params.toString()}`
         
@@ -250,21 +245,8 @@ export function Dashboard() {
         const result = await response.json()
         const backendExpenses = result.data || []
         
-        // Backend returns expenses in descending order (newest first), no need to sort
-        setExpenses(backendExpenses)
-        const newCursor = result.lastEvaluatedKey || null
-        
-        // Store cursor for current page to enable forward navigation
-        // This cursor is used to fetch the next page
-        setPageCursors(prev => ({
-          ...prev,
-          [currentPage]: newCursor
-        }))
-        
-        // Update total count if provided
-        if (result.totalCount !== undefined && result.totalCount !== null) {
-          setTotalCount(result.totalCount)
-        }
+        // Backend returns all expenses in descending order (newest first)
+        setAllExpenses(backendExpenses)
       } catch (err) {
         console.error("Error fetching expenses:", err)
         setExpensesError(err instanceof Error ? err.message : 'Failed to fetch expenses')
@@ -274,8 +256,7 @@ export function Dashboard() {
     }
     
     fetchExpenses()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, itemsPerPage])
+  }, [])
 
   const handleIngestCSV = () => {
     navigate("/ingest")
@@ -289,29 +270,19 @@ export function Dashboard() {
     signOut()
   }
 
-  // Calculate pagination
-  const startIndex = (currentPage - 1) * itemsPerPage
-  const endIndex = startIndex + expenses.length
-  const totalPages = totalCount !== null ? Math.ceil(totalCount / itemsPerPage) : null
-  const hasMorePages = totalPages !== null ? currentPage < totalPages : false
-
   // Reset to page 1 when page size changes
   useEffect(() => {
     setCurrentPage(1)
-    setPageCursors({}) // Clear all page cursors when page size changes
-    setTotalCount(null) // Reset count when page size changes
   }, [itemsPerPage])
 
   const handlePreviousPage = () => {
     if (currentPage > 1) {
-      const newPage = currentPage - 1
-      setCurrentPage(newPage)
-      // Cursor for previous page is already stored in pageCursors
+      setCurrentPage(currentPage - 1)
     }
   }
 
   const handleNextPage = () => {
-    if (hasMorePages && expenses.length > 0) {
+    if (currentPage < totalPages) {
       setCurrentPage(currentPage + 1)
     }
   }
@@ -592,7 +563,7 @@ export function Dashboard() {
                   <ResponsiveContainer width="100%" height={400}>
                     <LineChart
                       data={chartData}
-                      margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                      margin={{ top: 10, right: 50, left: 30, bottom: 80 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis 
@@ -605,12 +576,13 @@ export function Dashboard() {
                       <YAxis 
                         tick={{ fontSize: 12 }}
                         tickFormatter={(value) => `$${value.toFixed(0)}`}
+                        width={60}
                       />
                       <Tooltip 
                         formatter={(value: number) => `$${value.toFixed(2)}`}
                         labelStyle={{ color: '#000' }}
                       />
-                      <Legend />
+                      <Legend wrapperStyle={{ paddingTop: '20px' }} />
                       {chartCategories.map((category, index) => (
                         <Line
                           key={category}
@@ -884,7 +856,7 @@ export function Dashboard() {
                     <div className="flex items-center justify-between mt-4">
                       <div className="flex items-center gap-4">
                         <div className="text-sm text-muted-foreground">
-                          Showing {startIndex + 1} to {endIndex} {totalCount !== null ? `of ${totalCount}` : ''} expenses
+                          Showing {startIndex + 1} to {Math.min(endIndex, totalCount)} of {totalCount} expenses
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm text-muted-foreground">Rows per page:</span>
@@ -900,7 +872,7 @@ export function Dashboard() {
                           </Select>
                         </div>
                       </div>
-                      {(currentPage > 1 || hasMorePages) && (
+                      {totalPages > 1 && (
                         <div className="flex items-center gap-2">
                           <Button
                             variant="outline"
@@ -912,13 +884,13 @@ export function Dashboard() {
                             Previous
                           </Button>
                           <div className="text-sm text-muted-foreground">
-                            Page {currentPage}{totalPages !== null ? ` of ${totalPages}` : ''}
+                            Page {currentPage} of {totalPages}
                           </div>
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={handleNextPage}
-                            disabled={!hasMorePages || expenses.length === 0}
+                            disabled={currentPage >= totalPages}
                           >
                             Next
                             <ChevronRight className="h-4 w-4 ml-1" />

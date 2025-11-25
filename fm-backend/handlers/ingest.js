@@ -51,11 +51,21 @@ function getUserId(event) {
  * Apply field mapping to transform CSV row
  */
 function applyMapping(row, fieldMapping) {
-  return {
+  const mapped = {
     summary: row[fieldMapping.summary] || '',
     amount: row[fieldMapping.amount] || '',
     timestamp: row[fieldMapping.timestamp] || '',
   };
+  
+  // Include category if mapping is provided and column exists
+  if (fieldMapping.category && fieldMapping.category.trim() !== '') {
+    const categoryValue = row[fieldMapping.category];
+    if (categoryValue !== undefined && categoryValue !== null && categoryValue.trim() !== '') {
+      mapped.category = categoryValue.trim();
+    }
+  }
+  
+  return mapped;
 }
 
 /**
@@ -350,13 +360,28 @@ exports.handler = async (event) => {
       // Apply field mapping to get only the mapped fields
       const mapped = applyMapping(row, fieldMapping);
       
-      const messageBody = JSON.stringify({
+      // Parse amount and filter out negative amounts
+      const parsedAmount = parseFloat(mapped.amount);
+      if (!isNaN(parsedAmount) && parsedAmount < 0) {
+        console.log(`Filtering out row ${index + 1} with negative amount: ${parsedAmount}`);
+        // Return a resolved promise that indicates this row was filtered
+        return Promise.resolve({ success: true, index, filtered: true });
+      }
+      
+      const messageBodyObj = {
         userId: userId,
         summary: mapped.summary,
         amount: mapped.amount,
         timestamp: mapped.timestamp,
         s3Key: s3Key, // Optional reference to stored CSV file
-      });
+      };
+      
+      // Include category if present
+      if (mapped.category) {
+        messageBodyObj.category = mapped.category;
+      }
+      
+      const messageBody = JSON.stringify(messageBodyObj);
       
       const messageSize = Buffer.byteLength(messageBody, 'utf8');
       const maxMessageSize = 256 * 1024; // SQS limit is 256KB
@@ -406,8 +431,9 @@ exports.handler = async (event) => {
       return r.value;
     });
     
-    const successful = processedResults.filter(r => r?.success === true).length;
+    const successful = processedResults.filter(r => r?.success === true && !r?.filtered).length;
     const failed = processedResults.filter(r => r?.success === false).length;
+    const filtered = processedResults.filter(r => r?.filtered === true).length;
     
     if (failed > 0) {
       const failures = processedResults
@@ -418,6 +444,7 @@ exports.handler = async (event) => {
         totalRows: rows.length,
         successful: successful,
         failed: failed,
+        filtered: filtered,
         failures: failures,
       });
       
@@ -428,6 +455,10 @@ exports.handler = async (event) => {
       
       // If some failed, log warning but continue
       console.warn(`Partial failure: ${failed} out of ${rows.length} messages failed to send`);
+    }
+    
+    if (filtered > 0) {
+      console.log(`Filtered out ${filtered} rows with negative amounts`);
     }
     
     // Send empty message to analysis delay queue to trigger analysis (if at least some rows were enqueued)
@@ -461,12 +492,13 @@ exports.handler = async (event) => {
     }
     
     const duration = Date.now() - startTime;
-    const allSuccessful = successful === rows.length;
+    const allSuccessful = successful === (rows.length - filtered) && failed === 0;
     
     console.log(allSuccessful ? 'Ingest completed successfully' : 'Ingest completed with partial failures', {
       totalRows: rows.length,
       rowsEnqueued: successful,
       rowsFailed: failed,
+      rowsFiltered: filtered,
       s3Key: s3Key,
       userId: userId,
       duration: `${duration}ms`,
@@ -481,6 +513,7 @@ exports.handler = async (event) => {
           : `Partially successful: ${successful} of ${rows.length} rows enqueued`,
         rowsEnqueued: successful,
         rowsFailed: failed,
+        rowsFiltered: filtered,
         totalRows: rows.length,
         s3Key: s3Key,
       }),
