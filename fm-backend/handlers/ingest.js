@@ -381,6 +381,11 @@ exports.handler = async (event) => {
         messageBodyObj.category = mapped.category;
       }
       
+      // Include AI categorization flag if provided in form fields
+      if (fields.aiCategorizationEnabled === 'true' || fields.aiCategorizationEnabled === true) {
+        messageBodyObj.aiCategorizationEnabled = true;
+      }
+      
       const messageBody = JSON.stringify(messageBodyObj);
       
       const messageSize = Buffer.byteLength(messageBody, 'utf8');

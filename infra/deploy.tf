@@ -230,6 +230,30 @@ resource "aws_sqs_queue" "analysis_delay_queue" {
   }
 }
 
+resource "aws_sqs_queue" "categorization_dlq" {
+  name                      = "${var.app_name}-categorization-dlq"
+  message_retention_seconds = 1209600
+
+  tags = {
+    Name = "finance-manager"
+  }
+}
+
+resource "aws_sqs_queue" "categorization_queue" {
+  name                      = "${var.app_name}-categorization-queue"
+  message_retention_seconds = 345600
+  visibility_timeout_seconds = 300  # 5 minutes for batch processing (100 expenses)
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.categorization_dlq.arn
+    maxReceiveCount     = 3
+  })
+
+  tags = {
+    Name = "finance-manager"
+  }
+}
+
 resource "aws_iam_role_policy" "sqs_access" {
   name = "${var.app_name}-sqs-access"
   role = aws_iam_role.lambda_execution_role.id
@@ -249,7 +273,9 @@ resource "aws_iam_role_policy" "sqs_access" {
           aws_sqs_queue.ingest_queue.arn,
           aws_sqs_queue.ingest_dlq.arn,
           aws_sqs_queue.analysis_delay_queue.arn,
-          aws_sqs_queue.analysis_dlq.arn
+          aws_sqs_queue.analysis_dlq.arn,
+          aws_sqs_queue.categorization_queue.arn,
+          aws_sqs_queue.categorization_dlq.arn
         ]
       }
     ]
@@ -316,12 +342,19 @@ data "external" "build_lambda_packages" {
     cp handlers/analyzeExpenses.js "$INFRA_DIR/.terraform/lambda-packages/analyzeExpenses/" || { echo '{"error":"Failed to copy analyzeExpenses.js"}' >&2; exit 1; }
     cp -r node_modules "$INFRA_DIR/.terraform/lambda-packages/analyzeExpenses/" 2>/dev/null || { echo '{"error":"Failed to copy node_modules for analyzeExpenses"}' >&2; exit 1; }
     
+    # Build categorizeExpenses package
+    mkdir -p "$INFRA_DIR/.terraform/lambda-packages/categorizeExpenses" || { echo '{"error":"Failed to create categorizeExpenses directory"}' >&2; exit 1; }
+    cp handlers/categorizeExpenses.js "$INFRA_DIR/.terraform/lambda-packages/categorizeExpenses/" || { echo '{"error":"Failed to copy categorizeExpenses.js"}' >&2; exit 1; }
+    cp -r services "$INFRA_DIR/.terraform/lambda-packages/categorizeExpenses/" 2>/dev/null || { echo '{"error":"Failed to copy services directory"}' >&2; exit 1; }
+    cp -r node_modules "$INFRA_DIR/.terraform/lambda-packages/categorizeExpenses/" 2>/dev/null || { echo '{"error":"Failed to copy node_modules for categorizeExpenses"}' >&2; exit 1; }
+    
     # Verify directories were created
     [ -d "$INFRA_DIR/.terraform/lambda-packages/health" ] || { echo '{"error":"Health directory not found after creation"}' >&2; exit 1; }
     [ -d "$INFRA_DIR/.terraform/lambda-packages/expenses" ] || { echo '{"error":"Expenses directory not found after creation"}' >&2; exit 1; }
     [ -d "$INFRA_DIR/.terraform/lambda-packages/ingest" ] || { echo '{"error":"Ingest directory not found after creation"}' >&2; exit 1; }
     [ -d "$INFRA_DIR/.terraform/lambda-packages/processExpense" ] || { echo '{"error":"ProcessExpense directory not found after creation"}' >&2; exit 1; }
     [ -d "$INFRA_DIR/.terraform/lambda-packages/analyzeExpenses" ] || { echo '{"error":"AnalyzeExpenses directory not found after creation"}' >&2; exit 1; }
+    [ -d "$INFRA_DIR/.terraform/lambda-packages/categorizeExpenses" ] || { echo '{"error":"categorizeExpenses directory not found after creation"}' >&2; exit 1; }
     
     # Return JSON output (required by external data source)
     echo '{"status":"success"}'
@@ -364,6 +397,13 @@ data "archive_file" "analyze_expenses_zip" {
   output_path = "${path.module}/.terraform/analyzeExpenses.zip"
 }
 
+data "archive_file" "categorize_expenses_zip" {
+  depends_on = [data.external.build_lambda_packages]
+  type        = "zip"
+  source_dir  = "${path.module}/.terraform/lambda-packages/categorizeExpenses"
+  output_path = "${path.module}/.terraform/categorizeExpenses.zip"
+}
+
 resource "aws_lambda_function" "health" {
   depends_on      = [data.external.build_lambda_packages]
   filename         = data.archive_file.health_zip.output_path
@@ -395,9 +435,10 @@ resource "aws_lambda_function" "expenses" {
 
   environment {
     variables = {
-      APP_NAME        = var.app_name
-      EXPENSES_TABLE  = aws_dynamodb_table.expenses.name
-      ANALYSIS_TABLE  = aws_dynamodb_table.analysis.name
+      APP_NAME                = var.app_name
+      EXPENSES_TABLE          = aws_dynamodb_table.expenses.name
+      ANALYSIS_TABLE          = aws_dynamodb_table.analysis.name
+      CATEGORIZATION_QUEUE_URL = aws_sqs_queue.categorization_queue.url
     }
   }
 
@@ -443,8 +484,9 @@ resource "aws_lambda_function" "process_expense" {
 
   environment {
     variables = {
-      APP_NAME       = var.app_name
-      EXPENSES_TABLE = aws_dynamodb_table.expenses.name
+      APP_NAME                = var.app_name
+      EXPENSES_TABLE          = aws_dynamodb_table.expenses.name
+      CATEGORIZATION_QUEUE_URL = aws_sqs_queue.categorization_queue.url
     }
   }
 
@@ -476,6 +518,32 @@ resource "aws_lambda_function" "analyze_expenses" {
   }
 }
 
+resource "aws_lambda_function" "categorize_expenses" {
+  count            = var.openai_api_key != "" ? 1 : 0
+  depends_on      = [data.external.build_lambda_packages]
+  filename         = data.archive_file.categorize_expenses_zip.output_path
+  function_name    = "${var.app_name}-categorize-expenses"
+  role            = aws_iam_role.lambda_execution_role.arn
+  handler         = "categorizeExpenses.handler"
+  source_code_hash = data.archive_file.categorize_expenses_zip.output_base64sha256
+  runtime         = "nodejs20.x"
+  timeout         = 300  # 5 minutes for batch processing
+  memory_size     = 512  # 512 MB for processing batches
+
+  environment {
+    variables = {
+      APP_NAME       = var.app_name
+      EXPENSES_TABLE = aws_dynamodb_table.expenses.name
+      OPENAI_API_KEY = var.openai_api_key
+      OPENAI_MODEL   = var.openai_model
+    }
+  }
+
+  tags = {
+    Name = "finance-manager"
+  }
+}
+
 resource "aws_lambda_event_source_mapping" "process_expense_sqs" {
   event_source_arn = aws_sqs_queue.ingest_queue.arn
   function_name    = aws_lambda_function.process_expense.arn
@@ -488,6 +556,14 @@ resource "aws_lambda_event_source_mapping" "analyze_expenses_sqs" {
   function_name    = aws_lambda_function.analyze_expenses.arn
   batch_size       = 1
   maximum_batching_window_in_seconds = 0
+}
+
+resource "aws_lambda_event_source_mapping" "categorize_expenses_sqs" {
+  count            = var.openai_api_key != "" ? 1 : 0
+  event_source_arn = aws_sqs_queue.categorization_queue.arn
+  function_name    = aws_lambda_function.categorize_expenses[0].arn
+  batch_size       = 10  # Process up to 10 SQS messages at a time
+  maximum_batching_window_in_seconds = 5
 }
 
 resource "aws_cognito_user_pool" "main" {
@@ -687,6 +763,14 @@ resource "aws_apigatewayv2_route" "ingest_post" {
   api_id           = aws_apigatewayv2_api.main.id
   route_key        = "POST /api/ingest"
   target           = "integrations/${aws_apigatewayv2_integration.ingest.id}"
+  authorizer_id    = aws_apigatewayv2_authorizer.cognito.id
+  authorization_type = "JWT"
+}
+
+resource "aws_apigatewayv2_route" "expenses_categorize_validate_post" {
+  api_id           = aws_apigatewayv2_api.main.id
+  route_key        = "POST /api/expenses/categorize/validate"
+  target           = "integrations/${aws_apigatewayv2_integration.expenses.id}"
   authorizer_id    = aws_apigatewayv2_authorizer.cognito.id
   authorization_type = "JWT"
 }
