@@ -1,11 +1,11 @@
 # Terraform/OpenTofu files
 .terraform/
 .terraform.lock.hcl
-*.tfstate
-*.tfstate.*
 *.tfvars
 *.tfplan
-.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfstate.backup
 
 # Archive files
 *.zip
