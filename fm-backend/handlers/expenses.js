@@ -5,13 +5,16 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const crypto = require('crypto');
 
 const client = new DynamoDBClient({});
 const dynamodb = DynamoDBDocumentClient.from(client);
 const lambdaClient = new LambdaClient({});
+const sqs = new SQSClient({});
 const TABLE_NAME = process.env.EXPENSES_TABLE;
 const ANALYSIS_TABLE = process.env.ANALYSIS_TABLE;
+const CATEGORIZATION_QUEUE_URL = process.env.CATEGORIZATION_QUEUE_URL;
 const APP_NAME = process.env.APP_NAME || 'finance-manager';
 const ANALYZE_EXPENSES_FUNCTION_NAME = `${APP_NAME}-analyze-expenses`;
 
@@ -64,6 +67,118 @@ function getCurrentMonthYear() {
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
+}
+
+/**
+ * Send expense to categorization queue
+ */
+async function sendToCategorizationQueue(message) {
+  if (!CATEGORIZATION_QUEUE_URL) {
+    console.warn('CATEGORIZATION_QUEUE_URL not configured, skipping queue send');
+    return;
+  }
+  
+  await sqs.send(new SendMessageCommand({
+    QueueUrl: CATEGORIZATION_QUEUE_URL,
+    MessageBody: JSON.stringify({
+      expenseId: message.expenseId,
+      userId: message.userId,
+      timestamp: new Date().toISOString(),
+    }),
+  }));
+}
+
+/**
+ * Handle AI categorization validation request
+ */
+async function handleCategorizeValidateRequest(userId, event) {
+  const body = event.body ? JSON.parse(event.body) : {};
+  
+  // Validate
+  if (!body.expenseId || body.validated === undefined) {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({
+        message: 'Missing required fields: expenseId and validated are required',
+      }),
+    };
+  }
+  
+  // Get expense
+  const getResult = await dynamodb.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: { id: body.expenseId },
+  }));
+  
+  if (!getResult.Item) {
+    return {
+      statusCode: 404,
+      headers,
+      body: JSON.stringify({
+        message: 'Expense not found',
+      }),
+    };
+  }
+  
+  const expense = getResult.Item;
+  
+  // Verify ownership
+  if (expense.userId !== userId) {
+    return {
+      statusCode: 403,
+      headers,
+      body: JSON.stringify({
+        message: 'Forbidden: You do not have permission to validate this expense',
+      }),
+    };
+  }
+  
+  // Update expense
+  if (body.validated === true) {
+    // Accept AI suggestion
+    await dynamodb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { id: body.expenseId },
+      UpdateExpression: 'SET aiCategoryValidated = :validated, category = :category, categorizedAt = :categorizedAt, updatedAt = :updatedAt',
+      ExpressionAttributeValues: {
+        ':validated': true,
+        ':category': expense.aiCategorySuggestion,
+        ':categorizedAt': new Date().toISOString(),
+        ':updatedAt': new Date().toISOString(),
+      },
+    }));
+  } else {
+    // Reject AI suggestion, use user-provided category or leave uncategorized
+    const updateExpression = body.category 
+      ? 'SET aiCategoryValidated = :validated, category = :category, categorizedAt = :categorizedAt, updatedAt = :updatedAt'
+      : 'SET aiCategoryValidated = :validated, updatedAt = :updatedAt';
+    
+    const expressionValues = {
+      ':validated': false,
+      ':updatedAt': new Date().toISOString(),
+    };
+    
+    if (body.category) {
+      expressionValues[':category'] = body.category;
+      expressionValues[':categorizedAt'] = new Date().toISOString();
+    }
+    
+    await dynamodb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { id: body.expenseId },
+      UpdateExpression: updateExpression,
+      ExpressionAttributeValues: expressionValues,
+    }));
+  }
+  
+  return {
+    statusCode: 200,
+    headers,
+    body: JSON.stringify({
+      message: 'Categorization validation updated successfully',
+    }),
+  };
 }
 
 /**
@@ -431,6 +546,12 @@ exports.handler = async (event) => {
       return await handleRefreshAnalytics(userId);
     }
     
+    // Check if this is a categorization validation request
+    if (method === 'POST' && (path.endsWith('/categorize/validate') || path.includes('/expenses/categorize/validate'))) {
+      // Handle categorization validation endpoint
+      return await handleCategorizeValidateRequest(userId, event);
+    }
+    
     switch (method) {
       case 'GET': {
         // Get expenses for the authenticated user, optionally filtered by categorized status
@@ -589,6 +710,18 @@ exports.handler = async (event) => {
           updatedAt: new Date().toISOString(),
         };
         
+        // Handle category (existing behavior - backward compatible)
+        if (body.category && typeof body.category === 'string' && body.category.trim() !== '') {
+          expense.category = body.category.trim();
+          expense.categorizedAt = new Date().toISOString();
+        }
+        
+        // Handle AI categorization (new behavior - optional)
+        if (body.aiCategorizationEnabled === true && !expense.category) {
+          expense.aiCategorizationEnabled = true;
+          expense.aiCategorizationStatus = 'pending';  // Initial status
+        }
+        
         // If collision detected, add a note
         if (existingExpense) {
           expense.note = `Duplicate detected: Another expense with the same summary and timestamp already exists (ID: ${existingExpense.id})`;
@@ -607,6 +740,20 @@ exports.handler = async (event) => {
           TableName: TABLE_NAME,
           Item: expense,
         }));
+        
+        // If AI categorization enabled, send to queue asynchronously (don't await - return response immediately)
+        if (expense.aiCategorizationEnabled && expense.aiCategorizationStatus === 'pending') {
+          sendToCategorizationQueue({
+            expenseId: expense.id,
+            userId: expense.userId,
+          }).catch(error => {
+            // Log error but don't fail the request
+            console.error('Error sending to categorization queue', {
+              expenseId: expense.id,
+              error: error.message,
+            });
+          });
+        }
         
         const duration = Date.now() - startTime;
         console.log('Expense created successfully', {

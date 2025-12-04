@@ -1,0 +1,22 @@
+# Terraform/OpenTofu Variables
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored and should NOT be committed
+
+# AWS Configuration
+aws_region = "us-west-1"
+app_name   = "finance-manager"
+
+# Amplify Configuration
+amplify_repository = ""
+amplify_branch     = "main"
+
+# Cognito Configuration
+cognito_callback_url = "http://localhost:5173"
+
+# OpenAI Configuration (REQUIRED for AI categorization)
+openai_api_key = "sk-your-openai-api-key-here"
+openai_model   = "gpt-3.5-turbo"  # Optional, defaults to gpt-3.5-turbo
+
+# Cognito Domain Management
+# Set to false if domain already exists and can't be imported
+manage_cognito_domain = false  # Set to true to create/manage domain, false to skip

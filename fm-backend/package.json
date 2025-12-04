@@ -16,6 +16,7 @@
     "@aws-sdk/client-sqs": "^3.700.0",
     "@aws-sdk/lib-dynamodb": "^3.700.0",
     "busboy": "^1.6.0",
-    "csv-parse": "^6.1.0"
+    "csv-parse": "^6.1.0",
+    "openai": "^4.104.0"
   }
 }

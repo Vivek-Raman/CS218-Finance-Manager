@@ -12,6 +12,7 @@
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
     "@react-spring/web": "^9.7.5",
+    "@rolldown/binding-linux-x64-gnu": "^1.0.0-beta.52",
     "amazon-cognito-identity-js": "^6.3.16",
     "papaparse": "^5.4.1",
     "react": "^19.2.0",

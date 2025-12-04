@@ -28,3 +28,16 @@ variable "cognito_callback_url" {
   default     = "http://localhost:5173"
 }
 
+variable "openai_api_key" {
+  description = "OpenAI API key for AI categorization (can be empty for imports, required for deployment)"
+  type        = string
+  sensitive   = true
+  default     = ""  # Allow empty for imports
+}
+
+variable "openai_model" {
+  description = "OpenAI model to use for categorization"
+  type        = string
+  default     = "gpt-3.5-turbo"
+}
+

@@ -2,14 +2,7 @@ import { useState, useEffect, useRef } from "react"
 import TinderCard from "react-tinder-card"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { ArrowLeft, Settings } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { authenticatedFetch } from "@/lib/utils"
 import { toast } from "sonner"
@@ -18,7 +11,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 
 interface Expense {
@@ -26,6 +18,7 @@ interface Expense {
   description: string
   amount: number
   date: string
+  aiCategorySuggestion?: string
 }
 
 // Available categories
@@ -76,14 +69,8 @@ export function CategorizeExpenses() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
-  const [selectedCategory, setSelectedCategory] = useState<string>("")
-  const [swipeCategories, setSwipeCategories] = useState<Record<string, string>>({
-    left: "Food & Dining",
-    right: "Office & Business",
-    up: "Utilities",
-    down: "Entertainment",
-  })
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false)
+  const [pendingExpense, setPendingExpense] = useState<Expense | null>(null)
   const [lastEvaluatedKey, setLastEvaluatedKey] = useState<string | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false)
   const [totalCount, setTotalCount] = useState<number | null>(null)
@@ -120,6 +107,7 @@ export function CategorizeExpenses() {
           description: exp.summary || '',
           amount: exp.amount || 0,
           date: exp.timestamp || '',
+          aiCategorySuggestion: exp.aiCategorySuggestion,
         }))
         
         setExpenses(uncategorizedExpenses)
@@ -151,23 +139,9 @@ export function CategorizeExpenses() {
       case "right":
         handleSwipeRight(expense)
         break
-      case "up":
-        handleSwipeUp(expense)
-        break
-      case "down":
-        handleSwipeDown(expense)
-        break
       default:
         break
     }
-
-    // Remove the swiped expense from the list
-    setExpenses((prevExpenses) =>
-      prevExpenses.filter((e) => e.id !== expense.id)
-    )
-    
-    // Increment swiped count
-    setSwipedCount((prev) => prev + 1)
   }
 
   const updateExpenseCategory = async (expenseId: string, category: string) => {
@@ -202,52 +176,21 @@ export function CategorizeExpenses() {
   }
 
   const handleSwipeLeft = async (expense: Expense) => {
-    const category = swipeCategories.left
-    console.log(`Categorized "${expense.description}" as ${category} (swiped left)`)
-    await updateExpenseCategory(expense.id, category)
-  }
-
-  const handleSwipeRight = async (expense: Expense) => {
-    const category = swipeCategories.right
-    console.log(`Categorized "${expense.description}" as ${category} (swiped right)`)
-    await updateExpenseCategory(expense.id, category)
-  }
-
-  const handleSwipeUp = async (expense: Expense) => {
-    const category = swipeCategories.up
-    console.log(`Categorized "${expense.description}" as ${category} (swiped up)`)
-    await updateExpenseCategory(expense.id, category)
-  }
-
-  const handleSwipeDown = async (expense: Expense) => {
-    const category = swipeCategories.down
-    console.log(`Categorized "${expense.description}" as ${category} (swiped down)`)
-    await updateExpenseCategory(expense.id, category)
-  }
-
-  const handleCategorySelect = async (category: string) => {
-    if (expenses.length === 0) {
+    // Check if expense has AI category suggestion
+    if (!expense.aiCategorySuggestion) {
+      toast.error("No automatic category suggestion available. Swipe right to choose manually.")
       return
     }
 
-    // Get the top card (first expense in the stack)
-    const topExpense = expenses[0]
-    
     try {
-      // Update the expense category via API
-      await updateExpenseCategory(topExpense.id, category)
-      
-      // Wait 1 second before removing the card
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      // Remove the card from the stack
+      // Confirm the AI suggestion
+      await updateExpenseCategory(expense.id, expense.aiCategorySuggestion)
+
+      // Remove the swiped expense from the list after successful API call
       setExpenses((prevExpenses) =>
-        prevExpenses.filter((e) => e.id !== topExpense.id)
+        prevExpenses.filter((e) => e.id !== expense.id)
       )
-      
-      // Reset selected category
-      setSelectedCategory("")
-      
+
       // Increment swiped count
       setSwipedCount((prev) => prev + 1)
     } catch (err) {
@@ -256,11 +199,37 @@ export function CategorizeExpenses() {
     }
   }
 
-  const handleSwipeCategoryChange = (direction: string, category: string) => {
-    setSwipeCategories((prev) => ({
-      ...prev,
-      [direction]: category,
-    }))
+  const handleSwipeRight = (expense: Expense) => {
+    // Store expense and open modal for category selection
+    setPendingExpense(expense)
+    setIsCategoryModalOpen(true)
+
+    // Remove the card from state immediately (TinderCard already removed it from DOM)
+    setExpenses((prevExpenses) =>
+      prevExpenses.filter((e) => e.id !== expense.id)
+    )
+
+    // Increment swiped count
+    setSwipedCount((prev) => prev + 1)
+  }
+
+  const handleCategorySelect = async (category: string) => {
+    if (!pendingExpense) {
+      return
+    }
+
+    try {
+      // Update the expense category via API
+      await updateExpenseCategory(pendingExpense.id, category)
+
+      // Close modal and reset pending expense
+      setIsCategoryModalOpen(false)
+      setPendingExpense(null)
+    } catch (err) {
+      // Error already handled in updateExpenseCategory with toast
+      // Keep modal open so user can try again
+      // Card is already removed from state, so if API fails, user can still select category
+    }
   }
 
   const handleCardLeftScreen = (expenseId: string) => {
@@ -366,25 +335,24 @@ export function CategorizeExpenses() {
           return
         }
         
-        // Determine direction based on position
+        // Determine direction based on position (only left/right)
         if (Math.abs(tx) > Math.abs(ty)) {
           if (tx < -directionThreshold) {
             newDirection = 'left'
           } else if (tx > directionThreshold) {
             newDirection = 'right'
           }
-        } else {
-          if (ty < -directionThreshold) {
-            newDirection = 'up'
-          } else if (ty > directionThreshold) {
-            newDirection = 'down'
-          }
         }
 
         // Only update overlay if direction changed - direct DOM manipulation, no React re-render
         if (newDirection !== lastDirection) {
-          if (newDirection) {
-            updateOverlay(newDirection, swipeCategories[newDirection])
+          if (newDirection === 'left') {
+            // Show AI suggestion if available, otherwise show "Confirm"
+            const topExpense = expenses.find(e => e.id === topCardId)
+            const overlayText = topExpense?.aiCategorySuggestion || 'Confirm'
+            updateOverlay(newDirection, overlayText)
+          } else if (newDirection === 'right') {
+            updateOverlay(newDirection, 'Choose Category')
           } else {
             updateOverlay(null, null)
           }
@@ -414,7 +382,7 @@ export function CategorizeExpenses() {
         cancelAnimationFrame(animationFrameId)
       }
     }
-  }, [expenses, swipeCategories])
+  }, [expenses])
 
   const loadMoreExpenses = async () => {
     if (!lastEvaluatedKey || isLoadingMore) {
@@ -445,6 +413,7 @@ export function CategorizeExpenses() {
         description: exp.summary || '',
         amount: exp.amount || 0,
         date: exp.timestamp || '',
+        aiCategorySuggestion: exp.aiCategorySuggestion,
       }))
 
       setExpenses((prevExpenses) => {
@@ -487,106 +456,6 @@ export function CategorizeExpenses() {
               ) : null}
             </p>
           </div>
-          <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Settings"
-              >
-                <Settings className="h-5 w-5" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Configure Swipe Categories</DialogTitle>
-              </DialogHeader>
-              <div className="grid grid-cols-3 gap-4 w-full max-w-md mx-auto">
-                {/* Row 1: Top */}
-                <div></div>
-                <div>
-                  <label className="text-sm text-muted-foreground mb-2 block text-center">Swipe Up</label>
-                  <Select
-                    value={swipeCategories.up}
-                    onValueChange={(value) => handleSwipeCategoryChange("up", value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {cat}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div></div>
-                
-                {/* Row 2: Middle */}
-                <div>
-                  <label className="text-sm text-muted-foreground mb-2 block text-center">Swipe Left</label>
-                  <Select
-                    value={swipeCategories.left}
-                    onValueChange={(value) => handleSwipeCategoryChange("left", value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {cat}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div></div>
-                <div>
-                  <label className="text-sm text-muted-foreground mb-2 block text-center">Swipe Right</label>
-                  <Select
-                    value={swipeCategories.right}
-                    onValueChange={(value) => handleSwipeCategoryChange("right", value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {cat}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                
-                {/* Row 3: Bottom */}
-                <div></div>
-                <div>
-                  <label className="text-sm text-muted-foreground mb-2 block text-center">Swipe Down</label>
-                  <Select
-                    value={swipeCategories.down}
-                    onValueChange={(value) => handleSwipeCategoryChange("down", value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat} value={cat}>
-                          {cat}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div></div>
-              </div>
-            </DialogContent>
-          </Dialog>
         </div>
 
         {error && (
@@ -679,7 +548,7 @@ export function CategorizeExpenses() {
                 <TinderCard
                   onSwipe={(dir) => handleSwipe(dir, expense)}
                   onCardLeftScreen={() => handleCardLeftScreen(expense.id)}
-                  preventSwipe={[]}
+                    preventSwipe={['up', 'down']}
                   className="w-full select-none"
                 >
                   <Card className={`h-[500px] flex flex-col cursor-grab active:cursor-grabbing select-none ${
@@ -687,6 +556,16 @@ export function CategorizeExpenses() {
                   }`}>
                   <CardHeader className="pb-6">
                     <CardTitle className="text-2xl">{expense.description}</CardTitle>
+                    <div className="mt-3 flex flex-col gap-1">
+                      <span className="text-sm text-muted-foreground">
+                        Swipe → to assign a category
+                      </span>
+                      {expense.aiCategorySuggestion && (
+                        <span className="text-sm text-muted-foreground">
+                          Swipe ← to confirm generated category
+                        </span>
+                      )}
+                    </div>
                   </CardHeader>
                   <CardContent className="flex-1 flex flex-col justify-center items-center pb-6">
                     <div className="text-5xl font-bold mb-4">
@@ -695,23 +574,13 @@ export function CategorizeExpenses() {
                     <div className="text-muted-foreground mb-8">
                       {formatDate(expense.date)}
                     </div>
-                    <div className="w-full max-w-md mb-8">
-                      <Select
-                        value={selectedCategory}
-                        onValueChange={handleCategorySelect}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Choose a category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {categories.map((cat) => (
-                            <SelectItem key={cat} value={cat}>
-                              {cat}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    {expense.aiCategorySuggestion && (
+                      <div className="mt-4 px-6 py-3 rounded-lg bg-primary/10 border-2 border-primary/20">
+                        <div className="text-2xl font-bold text-primary text-center">
+                          {expense.aiCategorySuggestion}
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TinderCard>
@@ -721,6 +590,42 @@ export function CategorizeExpenses() {
           </div>
         )}
       </div>
+
+      {/* Category Selection Modal */}
+      <Dialog
+        open={isCategoryModalOpen}
+        onOpenChange={(open) => {
+          setIsCategoryModalOpen(open)
+          if (!open) {
+            // Reset pending expense when modal is closed without selection
+            setPendingExpense(null)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Select Category</DialogTitle>
+          </DialogHeader>
+          {pendingExpense && (
+            <div className="mb-4 p-3 bg-muted rounded-md">
+              <p className="text-sm font-medium">{pendingExpense.description}</p>
+              <p className="text-sm text-muted-foreground">${pendingExpense.amount.toFixed(2)}</p>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3 mt-4">
+            {categories.map((category) => (
+              <Button
+                key={category}
+                variant="outline"
+                className="h-auto py-4 text-left justify-start"
+                onClick={() => handleCategorySelect(category)}
+              >
+                {category}
+              </Button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

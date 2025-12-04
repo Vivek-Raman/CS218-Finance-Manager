@@ -212,12 +212,26 @@ tofu-validate:
 
 tofu-plan:
 	@echo "Creating OpenTofu execution plan..."
-	@cd infra && tofu plan
+	@cd infra && \
+	if [ -f terraform.tfvars ]; then \
+	  tofu plan -var-file=terraform.tfvars; \
+	else \
+	  echo "⚠️  Warning: terraform.tfvars not found. Using defaults or environment variables."; \
+	  echo "   Create infra/terraform.tfvars from infra/terraform.tfvars.example"; \
+	  tofu plan; \
+	fi
 	@echo "✓ Plan complete"
 
 tofu-apply:
 	@echo "Applying OpenTofu infrastructure..."
-	@cd infra && tofu apply -auto-approve
+	@cd infra && \
+	if [ -f terraform.tfvars ]; then \
+	  tofu apply -auto-approve -var-file=terraform.tfvars; \
+	else \
+	  echo "⚠️  Warning: terraform.tfvars not found. Using defaults or environment variables."; \
+	  echo "   Create infra/terraform.tfvars from infra/terraform.tfvars.example"; \
+	  tofu apply -auto-approve; \
+	fi
 	@echo "✓ Infrastructure deployed"
 
 tofu-destroy:
@@ -230,7 +244,15 @@ tofu-destroy:
 deploy-plan: tofu-validate tofu-plan
 	@echo "✓ Deployment plan ready. Run 'make deploy-infra' to apply."
 
-deploy-infra: tofu-validate tofu-apply
+deploy-infra: tofu-validate
+	@echo "Checking for terraform.tfvars..."
+	@cd infra && \
+	if [ ! -f terraform.tfvars ]; then \
+	  echo "⚠️  Warning: terraform.tfvars not found!"; \
+	  echo "   Create it from terraform.tfvars.example and add your OpenAI API key."; \
+	  echo "   Continuing with defaults/environment variables..."; \
+	fi
+	@$(MAKE) tofu-apply
 	@echo "✓ Infrastructure deployed successfully"
 	@echo "Run 'make tofu-outputs' to see deployment outputs"
 

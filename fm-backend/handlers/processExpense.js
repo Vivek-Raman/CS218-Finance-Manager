@@ -4,11 +4,14 @@
  */
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand, PutCommand } = require('@aws-sdk/lib-dynamodb');
+const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const crypto = require('crypto');
 
 const client = new DynamoDBClient({});
 const dynamodb = DynamoDBDocumentClient.from(client);
+const sqs = new SQSClient({});
 const TABLE_NAME = process.env.EXPENSES_TABLE;
+const CATEGORIZATION_QUEUE_URL = process.env.CATEGORIZATION_QUEUE_URL;
 
 // Validate environment variables
 if (!TABLE_NAME) {
@@ -21,6 +24,24 @@ if (!TABLE_NAME) {
 function generateHash(userId, summary, timestamp) {
   const hashInput = `${userId}|${summary}|${timestamp}`;
   return crypto.createHash('sha256').update(hashInput).digest('hex');
+}
+
+/**
+ * Send expense to categorization queue
+ */
+async function sendToCategorizationQueue(message) {
+  if (!CATEGORIZATION_QUEUE_URL) {
+    throw new Error('CATEGORIZATION_QUEUE_URL environment variable is not set');
+  }
+  
+  await sqs.send(new SendMessageCommand({
+    QueueUrl: CATEGORIZATION_QUEUE_URL,
+    MessageBody: JSON.stringify({
+      expenseId: message.expenseId,
+      userId: message.userId,
+      timestamp: new Date().toISOString(),
+    }),
+  }));
 }
 
 
@@ -59,7 +80,7 @@ exports.handler = async (event) => {
         throw new Error(`Failed to parse SQS message body as JSON: ${parseError.message}. Body: ${record.body?.substring(0, 200)}`);
       }
       
-      const { userId, summary, amount, timestamp, s3Key, category } = messageBody;
+      const { userId, summary, amount, timestamp, s3Key, category, aiCategorizationEnabled } = messageBody;
       
       console.log('Parsed SQS message', {
         messageId: record.messageId,
@@ -175,10 +196,16 @@ exports.handler = async (event) => {
         updatedAt: new Date().toISOString(),
       };
       
-      // If category is provided, add it and set categorizedAt
+      // Handle category (existing behavior - backward compatible)
       if (category && typeof category === 'string' && category.trim() !== '') {
         expense.category = category.trim();
         expense.categorizedAt = new Date().toISOString();
+      }
+      
+      // Handle AI categorization flag (new behavior - optional)
+      if (aiCategorizationEnabled && !expense.category) {
+        expense.aiCategorizationEnabled = true;
+        expense.aiCategorizationStatus = 'pending';  // Initial status
       }
       
       // Save to DynamoDB
@@ -200,6 +227,29 @@ exports.handler = async (event) => {
         expenseId: expenseId,
         putResult: putResult,
       });
+      
+      // After saving, if AI categorization enabled, send to queue
+      if (expense.aiCategorizationEnabled && expense.aiCategorizationStatus === 'pending') {
+        try {
+          await sendToCategorizationQueue({
+            expenseId: expense.id,
+            userId: expense.userId,
+          });
+          console.log('Expense sent to categorization queue', {
+            messageId: record.messageId,
+            expenseId: expense.id,
+            userId: expense.userId,
+          });
+        } catch (queueError) {
+          // Log error but don't fail expense creation
+          console.error('Error sending to categorization queue', {
+            messageId: record.messageId,
+            expenseId: expense.id,
+            error: queueError.message,
+          });
+          // Leave status as 'pending' - will be retried later if needed
+        }
+      }
       
       const recordDuration = Date.now() - recordStartTime;
       console.log('Expense processed successfully', {
