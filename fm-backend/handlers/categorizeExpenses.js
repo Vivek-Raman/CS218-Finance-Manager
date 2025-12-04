@@ -4,8 +4,8 @@
  */
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, UpdateCommand, BatchGetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
-const { categorizeBatch } = require('../services/expenseCategorizer');
-const { getUserCategories } = require('../services/categoryManager');
+const { categorizeBatch } = require('./services/expenseCategorizer');
+const { getUserCategories } = require('./services/categoryManager');
 
 const client = new DynamoDBClient({});
 const dynamodb = DynamoDBDocumentClient.from(client);
@@ -140,11 +140,11 @@ async function processCategorizationBatch(expenseIds, userId) {
             return dynamodb.send(new UpdateCommand({
               TableName: EXPENSES_TABLE,
               Key: { id: result.expenseId },
-              UpdateExpression: 'SET aiCategorizationStatus = :status, aiCategorySuggestion = :suggestion, aiCategorizedAt = :categorizedAt, updatedAt = :updatedAt',
+              UpdateExpression: 'SET aiCategorizationStatus = :status, aiCategorySuggestion = :suggestion, autoCategorizedAt = :autoCategorizedAt, updatedAt = :updatedAt',
               ExpressionAttributeValues: {
                 ':status': 'completed',
                 ':suggestion': result.suggestedCategory,
-                ':categorizedAt': new Date().toISOString(),
+                ':autoCategorizedAt': new Date().toISOString(),
                 ':updatedAt': new Date().toISOString(),
               },
             }));

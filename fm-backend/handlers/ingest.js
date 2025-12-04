@@ -373,17 +373,14 @@ exports.handler = async (event) => {
         summary: mapped.summary,
         amount: mapped.amount,
         timestamp: mapped.timestamp,
+        aiCategorizationEnabled: true,
         s3Key: s3Key, // Optional reference to stored CSV file
       };
       
       // Include category if present
-      if (mapped.category) {
+      if (mapped.category && mapped.category.trim() !== '') {
         messageBodyObj.category = mapped.category;
-      }
-      
-      // Include AI categorization flag if provided in form fields
-      if (fields.aiCategorizationEnabled === 'true' || fields.aiCategorizationEnabled === true) {
-        messageBodyObj.aiCategorizationEnabled = true;
+        messageBodyObj.aiCategorizationEnabled = false;
       }
       
       const messageBody = JSON.stringify(messageBodyObj);

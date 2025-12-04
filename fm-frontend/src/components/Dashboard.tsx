@@ -15,8 +15,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Upload, LogOut, AlertCircle, ChevronLeft, ChevronRight, BarChart3, RefreshCw, TrendingUp } from "lucide-react"
+import { Upload, LogOut, AlertCircle, ChevronLeft, ChevronRight, BarChart3, RefreshCw, TrendingUp, Trash2 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/contexts/AuthContext"
 import { useEffect, useState } from "react"
@@ -74,6 +82,8 @@ export function Dashboard() {
   const [monthlyTrendData, setMonthlyTrendData] = useState<MonthlyTrendData | null>(null)
   const [isLoadingMonthlyTrend, setIsLoadingMonthlyTrend] = useState<boolean>(true)
   const [monthlyTrendError, setMonthlyTrendError] = useState<string | null>(null)
+  const [isFlushDialogOpen, setIsFlushDialogOpen] = useState<boolean>(false)
+  const [isFlushing, setIsFlushing] = useState<boolean>(false)
 
   // Fetch uncategorized expenses count
   useEffect(() => {
@@ -355,6 +365,40 @@ export function Dashboard() {
         window.location.reload()
       }, 3000)
     }, 1000)
+  }
+
+  // Flush expenses handler
+  const handleFlushExpenses = async () => {
+    setIsFlushing(true)
+    
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.REACT_APP_API_URL || ''
+      const endpoint = `${apiUrl}/api/expenses/flush`
+      
+      const response = await authenticatedFetch(endpoint, {
+        method: 'POST',
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }))
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+      }
+      
+      const result = await response.json()
+      toast.success(`Successfully flushed ${result.data?.expensesDeleted || 0} expenses and ${result.data?.analyticsDeleted || 0} analytics`)
+      
+      setIsFlushDialogOpen(false)
+      
+      // Reload the page after a short delay to refresh all data
+      setTimeout(() => {
+        window.location.reload()
+      }, 1000)
+    } catch (err) {
+      console.error("Error flushing expenses:", err)
+      toast.error(err instanceof Error ? err.message : 'Failed to flush expenses and analytics')
+    } finally {
+      setIsFlushing(false)
+    }
   }
 
   return (
@@ -833,6 +877,57 @@ export function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Flush Expenses Button */}
+        <div className="mt-8 flex justify-center">
+          <Button
+            variant="ghost"
+            onClick={() => setIsFlushDialogOpen(true)}
+            className="text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Flush All Expenses and Analytics
+          </Button>
+        </div>
+
+        {/* Flush Confirmation Dialog */}
+        <Dialog open={isFlushDialogOpen} onOpenChange={setIsFlushDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Flush All Expenses and Analytics</DialogTitle>
+              <DialogDescription>
+                This action will permanently delete all expenses and analytics data for your account. 
+                This cannot be undone. Are you sure you want to continue?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setIsFlushDialogOpen(false)}
+                disabled={isFlushing}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleFlushExpenses}
+                disabled={isFlushing}
+              >
+                {isFlushing ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Flushing...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Flush All Data
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

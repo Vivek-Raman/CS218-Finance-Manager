@@ -149,17 +149,17 @@ test('Should update status to completed with suggestion', () => {
     suggestedCategory: 'Food & Dining',
   };
   
-  const updateExpression = 'SET aiCategorizationStatus = :status, aiCategorySuggestion = :suggestion, aiCategorizedAt = :categorizedAt, updatedAt = :updatedAt';
+  const updateExpression = 'SET aiCategorizationStatus = :status, aiCategorySuggestion = :suggestion, autoCategorizedAt = :autoCategorizedAt, updatedAt = :updatedAt';
   const expressionValues = {
     ':status': 'completed',
     ':suggestion': result.suggestedCategory,
-    ':categorizedAt': new Date().toISOString(),
+    ':autoCategorizedAt': new Date().toISOString(),
     ':updatedAt': new Date().toISOString(),
   };
   
   assertEqual(expressionValues[':status'], 'completed', 'Should set status to completed');
   assertEqual(expressionValues[':suggestion'], 'Food & Dining', 'Should set suggestion');
-  assert(expressionValues[':categorizedAt'], 'Should set categorizedAt');
+  assert(expressionValues[':autoCategorizedAt'], 'Should set autoCategorizedAt');
 });
 
 // Test 6: Status update to 'failed'
