@@ -1,5 +1,7 @@
 # Finance Manager
 
+Demo video: https://youtu.be/VxxOrs-88to
+
 ## Make Commands
 
 ### Development
